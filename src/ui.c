@@ -14,7 +14,9 @@
 #include "util.h"
 #include "version.h"
 
+#include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Panel colors (4 components, for rect fills). */
@@ -388,6 +390,33 @@ static void draw_footer(SDL_Renderer* r)
 /* Actions                                                             */
 /* ------------------------------------------------------------------ */
 
+/* Runs the install pipeline off the UI thread (prepare involves network
+ * round-trips: header/entry/sfo/icon fetches + one probe per piece). */
+struct retry_ctx {
+    char url[TASK_URL_MAX];
+    bool is_ref;
+};
+
+static void* retry_thread(void* arg)
+{
+    struct retry_ctx* ctx = (struct retry_ctx*)arg;
+    install_result_t result;
+    char err[256];
+
+    if (ctx->is_ref) {
+        if (!installer_install_ref_pkg_url(ctx->url, &result, err, sizeof(err))) {
+            LOG_WARN("ui: re-transfer failed: %s", err);
+        }
+    } else {
+        const char* one[1] = { ctx->url };
+        if (!installer_install_direct(one, 1, &result, err, sizeof(err))) {
+            LOG_WARN("ui: re-transfer failed: %s", err);
+        }
+    }
+    free(ctx);
+    return NULL;
+}
+
 static const task_info_t* selected_snapshot(struct ui_jobs* jobs)
 {
     ui_collect(jobs);
@@ -438,8 +467,8 @@ static void action_retry(void)
 {
     struct ui_jobs jobs;
     const task_info_t* t = selected_snapshot(&jobs);
-    install_result_t result;
-    char err[256];
+    struct retry_ctx* ctx;
+    pthread_t tid;
 
     if (!t) {
         return;
@@ -457,16 +486,19 @@ static void action_retry(void)
         return;
     }
 
+    ctx = (struct retry_ctx*)malloc(sizeof(*ctx));
+    if (!ctx) {
+        return;
+    }
+    snprintf(ctx->url, sizeof(ctx->url), "%s", t->url);
+    ctx->is_ref = t->is_ref;
+
     LOG_INFO("ui: re-transferring '%s'", t->title[0] ? t->title : t->url);
-    if (t->is_ref) {
-        if (!installer_install_ref_pkg_url(t->url, &result, err, sizeof(err))) {
-            LOG_WARN("ui: re-transfer failed: %s", err);
-        }
+    if (pthread_create(&tid, NULL, retry_thread, ctx) == 0) {
+        pthread_detach(tid);
     } else {
-        const char* one[1] = { t->url };
-        if (!installer_install_direct(one, 1, &result, err, sizeof(err))) {
-            LOG_WARN("ui: re-transfer failed: %s", err);
-        }
+        free(ctx);
+        LOG_WARN("ui: unable to start re-transfer");
     }
 }
 
