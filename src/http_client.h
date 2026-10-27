@@ -39,12 +39,36 @@ typedef struct http_result {
 bool http_client_get(const char* url, uint64_t offset, uint64_t length,
                      uint8_t* buf, size_t bufsz, http_result_t* result);
 
+typedef struct http_session http_session_t;
+
+/*
+ * Reusable keep-alive session bound to one URL, for hot loops that issue
+ * many range GETs against the same resource (the prefetch engine). The
+ * template/connection are created once and reused, removing the
+ * per-request TCP/TLS handshake.
+ */
+http_session_t* http_session_open(const char* url);
+void http_session_close(http_session_t* session);
+
+/*
+ * Range GET reusing *psess (opened on first use; rebound automatically on
+ * transport failure, e.g. a stale keep-alive connection — one retry).
+ * Same result semantics as http_client_get. Safe to pass the same session
+ * from a single thread only.
+ */
+bool http_client_get_session(http_session_t** psess, const char* url,
+                             uint64_t offset, uint64_t length,
+                             uint8_t* buf, size_t bufsz, http_result_t* result);
+
 /*
  * Probes a URL: fetches just the first byte to learn the total size and
  * whether the server supports Range requests (result->partial == true).
  */
 bool http_client_probe(const char* url, uint64_t* total_size, bool* accepts_ranges);
 
-/* Tears down the SSL/HTTP contexts (safe to call when never initialized,
- * e.g. after the network went down mid-run). */
+/*
+ * Tears down the SSL/HTTP contexts (safe to call when never initialized,
+ * e.g. after the network went down mid-run). Deferred automatically while
+ * requests or sessions are in flight.
+ */
 void http_client_term(void);

@@ -59,6 +59,10 @@ struct prefetch {
     bool threads_spawned;
 };
 
+struct worker_ctx {
+    prefetch_t* pf;
+};
+
 static uint64_t chunk_start(size_t chunk)
 {
     return (uint64_t)chunk * PREFETCH_CHUNK_SIZE;
@@ -71,11 +75,9 @@ static size_t chunk_index(uint64_t pos)
 
 static void* worker_thread(void* arg)
 {
-    typedef struct {
-        prefetch_t* pf;
-    } worker_ctx_t;
-    worker_ctx_t* ctx = (worker_ctx_t*)arg;
+    struct worker_ctx* ctx = (struct worker_ctx*)arg;
     prefetch_t* pf = ctx->pf;
+    http_session_t* sess = NULL;
     uint8_t* buf = NULL;
 
     free(ctx);
@@ -106,6 +108,7 @@ static void* worker_thread(void* arg)
 
             if (pf->aborting) {
                 pthread_mutex_unlock(&pf->lock);
+                http_session_close(sess);
                 free(buf);
                 return NULL;
             }
@@ -136,6 +139,7 @@ static void* worker_thread(void* arg)
                 }
                 if (all_done) {
                     pthread_mutex_unlock(&pf->lock);
+                    http_session_close(sess);
                     free(buf);
                     return NULL; /* finished */
                 }
@@ -158,7 +162,7 @@ static void* worker_thread(void* arg)
             want = PREFETCH_CHUNK_SIZE;
         }
 
-        if (!http_client_get(pf->url, off, want, buf, want, &r) ||
+        if (!http_client_get_session(&sess, pf->url, off, want, buf, want, &r) ||
             !HTTP_IS_OK(r.status) || r.body_len != want) {
             pthread_mutex_lock(&pf->lock);
             if (pf->chunk_state[c] == CHUNK_CLAIMED) {
@@ -170,6 +174,7 @@ static void* worker_thread(void* arg)
             pthread_mutex_unlock(&pf->lock);
             LOG_WARN("prefetch: chunk %zu failed at offset %llu (HTTP %d)",
                      c, (unsigned long long)off, r.status);
+            http_session_close(sess);
             free(buf);
             return NULL;
         }
@@ -201,6 +206,7 @@ static void* worker_thread(void* arg)
         pthread_mutex_unlock(&pf->lock);
 
         if (aborting) {
+            http_session_close(sess);
             free(buf);
             return NULL;
         }
@@ -248,10 +254,7 @@ prefetch_t* prefetch_start(const char* url, uint64_t total_size, int connections
     {
         int i;
         for (i = 0; i < connections; ++i) {
-            typedef struct {
-                prefetch_t* pf;
-            } worker_ctx_t;
-            worker_ctx_t* ctx = (worker_ctx_t*)malloc(sizeof(*ctx));
+            struct worker_ctx* ctx = (struct worker_ctx*)malloc(sizeof(*ctx));
             if (!ctx) {
                 goto err;
             }

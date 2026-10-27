@@ -3,7 +3,10 @@
  * Copyright (c) 2025-present AldySan and contributors.
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  *
- * libSceHttp wrapper. One-shot GET / range-GET requests with chunked reads.
+ * libSceHttp wrapper. One-shot GET / range-GET requests with chunked reads,
+ * plus reusable keep-alive sessions for hot loops (the segmented prefetch
+ * engine issues thousands of range GETs per package; session reuse removes
+ * the per-request TCP/TLS handshake).
  *
  * Notes:
  * - sceHttpAddRequestHeader mode and sceHttpsDisableOption flags are not
@@ -12,6 +15,9 @@
  * - TLS certificate checks are disabled to keep downloads working against
  *   LAN hosts with self-signed certificates (same behaviour as the
  *   original application).
+ * - http_client_term() is safe to call while requests or sessions are in
+ *   flight: teardown is deferred until the last one finishes (the network
+ *   monitor calls it when the link drops).
  */
 #include "http_client.h"
 #include "log.h"
@@ -42,10 +48,17 @@
 #define HTTPS_FLAG_NOT_BEFORE_CHECK 0x10u
 #define HTTPS_FLAG_KNOWN_CA_CHECK 0x20u
 
+struct http_session {
+    int tpl;
+    int conn;
+};
+
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool s_ready = false;
 static int s_ssl_ctx = -1;
 static int s_http_ctx = -1;
+static int s_busy = 0;         /* in-flight requests + open sessions */
+static bool s_term_pending = false;
 
 /* Caller must hold s_lock. */
 static bool ensure_init_locked(void)
@@ -76,11 +89,14 @@ static bool ensure_init_locked(void)
     s_http_ctx = ret;
 
     s_ready = true;
+    s_term_pending = false;
     return true;
 }
 
-static void force_term(void)
+/* Caller must hold s_lock (and s_busy == 0). */
+static void force_term_locked(void)
 {
+    s_term_pending = false;
     if (!s_ready) {
         return;
     }
@@ -90,6 +106,51 @@ static void force_term(void)
     sceSslTerm();
     s_ssl_ctx = -1;
 }
+
+/* Caller must hold s_lock. Releases one busy reference; runs a deferred
+ * teardown when the last one leaves. */
+static void busy_release_locked(void)
+{
+    if (s_busy > 0) {
+        --s_busy;
+    }
+    if (s_busy == 0 && s_term_pending) {
+        force_term_locked();
+    }
+}
+
+/* Creates a configured request template. The caller must hold a busy
+ * reference so s_http_ctx stays valid. */
+static int create_template(void)
+{
+    unsigned int ssl_flags;
+    int tpl;
+    int ret;
+
+    tpl = sceHttpCreateTemplate(s_http_ctx, APP_SHORT_NAME "/" APP_VERSION,
+                                ORBIS_HTTP_VERSION_1_1, 1 /* auto redirect */);
+    if (tpl < 0) {
+        LOG_ERROR("sceHttpCreateTemplate failed: 0x%08X", tpl);
+        return -1;
+    }
+
+    ret = sceHttpSetConnectTimeOut(tpl, HTTP_CONNECT_TIMEOUT_US);
+    if (ret < 0) {
+        LOG_WARN("sceHttpSetConnectTimeOut failed: 0x%08X", ret);
+    }
+    sceHttpSetRecvTimeOut(tpl, HTTP_RECV_TIMEOUT_US);
+
+    ssl_flags = HTTPS_FLAG_SERVER_VERIFY | HTTPS_FLAG_CLIENT_VERIFY |
+                HTTPS_FLAG_CN_CHECK | HTTPS_FLAG_KNOWN_CA_CHECK |
+                HTTPS_FLAG_NOT_AFTER_CHECK | HTTPS_FLAG_NOT_BEFORE_CHECK;
+    ret = sceHttpsDisableOption(tpl, ssl_flags);
+    if (ret != 0) {
+        /* Non-fatal: some firmwares refuse the full flag set. */
+        LOG_DEBUG("sceHttpsDisableOption: 0x%08X", ret);
+    }
+    return tpl;
+}
+
 /* Parses "Content-Range: bytes 0-0/123456" total part. */
 static bool parse_content_range_total(const char* headers, uint64_t* total)
 {
@@ -120,20 +181,21 @@ static bool parse_content_range_total(const char* headers, uint64_t* total)
 }
 
 /*
- * Core request: GET url (optionally with a Range header value),
- * reads up to buf capacity bytes into buf (buf may be NULL to discard).
- * resp_headers (optional) receives the raw response headers.
+ * Core request over an existing template/connection pair: GET url
+ * (optionally with a Range header value), reads up to buf capacity bytes
+ * into buf (buf may be NULL to discard). resp_headers (optional) receives
+ * the raw response headers. The caller must hold a busy reference (directly
+ * or via a session) so the http context stays alive.
  */
-static bool do_request(const char* url, const char* range_value,
-                       uint8_t* buf, size_t bufsz,
-                       http_result_t* result,
-                       char* resp_headers, size_t resp_headers_sz)
+static bool request_with(int tpl, int conn, const char* url, const char* range_value,
+                         uint8_t* buf, size_t bufsz,
+                         http_result_t* result,
+                         char* resp_headers, size_t resp_headers_sz)
 {
-    int tpl = -1, conn = -1, req = -1;
+    int req = -1;
     uint64_t stored = 0;
     uint8_t* chunk = NULL;
     bool status = false;
-    bool inited;
     int ret;
 
     if (!url || !result) {
@@ -141,53 +203,16 @@ static bool do_request(const char* url, const char* range_value,
     }
     memset(result, 0, sizeof(*result));
 
-    pthread_mutex_lock(&s_lock);
-    inited = ensure_init_locked();
-    pthread_mutex_unlock(&s_lock);
-    if (!inited) {
-        return false;
-    }
-
     chunk = (uint8_t*)malloc(HTTP_CHUNK_SIZE);
     if (!chunk) {
         return false;
     }
 
     do {
-        unsigned int ssl_flags;
-
-        tpl = sceHttpCreateTemplate(s_http_ctx, APP_SHORT_NAME "/" APP_VERSION,
-                                    ORBIS_HTTP_VERSION_1_1, 1 /* auto redirect */);
-        if (tpl < 0) {
-            LOG_ERROR("sceHttpCreateTemplate failed: 0x%08X", tpl);
-            break;
-        }
-
-        ret = sceHttpSetConnectTimeOut(tpl, HTTP_CONNECT_TIMEOUT_US);
-        if (ret < 0) {
-            LOG_WARN("sceHttpSetConnectTimeOut failed: 0x%08X", ret);
-        }
-        sceHttpSetRecvTimeOut(tpl, HTTP_RECV_TIMEOUT_US);
-
-        conn = sceHttpCreateConnectionWithURL(tpl, url, 1 /* keepalive */);
-        if (conn < 0) {
-            LOG_ERROR("sceHttpCreateConnectionWithURL failed: 0x%08X", conn);
-            break;
-        }
-
         req = sceHttpCreateRequestWithURL2(conn, "GET", url, (uint64_t)0);
         if (req < 0) {
             LOG_ERROR("sceHttpCreateRequestWithURL2 failed: 0x%08X", req);
             break;
-        }
-
-        ssl_flags = HTTPS_FLAG_SERVER_VERIFY | HTTPS_FLAG_CLIENT_VERIFY |
-                    HTTPS_FLAG_CN_CHECK | HTTPS_FLAG_KNOWN_CA_CHECK |
-                    HTTPS_FLAG_NOT_AFTER_CHECK | HTTPS_FLAG_NOT_BEFORE_CHECK;
-        ret = sceHttpsDisableOption(tpl, ssl_flags);
-        if (ret != 0) {
-            /* Non-fatal: some firmwares refuse the full flag set. */
-            LOG_DEBUG("sceHttpsDisableOption: 0x%08X", ret);
         }
 
         ret = sceHttpAddRequestHeader(req, "Accept-Encoding", "identity",
@@ -272,20 +297,131 @@ static bool do_request(const char* url, const char* range_value,
     if (req >= 0) {
         sceHttpDeleteRequest(req);
     }
+    free(chunk);
+    return status;
+}
+
+/* One-shot request: creates (and tears down) a template + connection. */
+static bool do_request(const char* url, const char* range_value,
+                       uint8_t* buf, size_t bufsz,
+                       http_result_t* result,
+                       char* resp_headers, size_t resp_headers_sz)
+{
+    int tpl = -1;
+    int conn = -1;
+    bool ok = false;
+    bool inited;
+
+    if (!url || !result) {
+        return false;
+    }
+    memset(result, 0, sizeof(*result));
+
+    pthread_mutex_lock(&s_lock);
+    inited = ensure_init_locked();
+    if (inited) {
+        ++s_busy;
+    }
+    pthread_mutex_unlock(&s_lock);
+    if (!inited) {
+        return false;
+    }
+
+    tpl = create_template();
+    if (tpl >= 0) {
+        conn = sceHttpCreateConnectionWithURL(tpl, url, 1 /* keepalive */);
+        if (conn < 0) {
+            LOG_ERROR("sceHttpCreateConnectionWithURL failed: 0x%08X", conn);
+        }
+    }
+    if (tpl >= 0 && conn >= 0) {
+        ok = request_with(tpl, conn, url, range_value, buf, bufsz,
+                          result, resp_headers, resp_headers_sz);
+    }
+
     if (conn >= 0) {
         sceHttpDeleteConnection(conn);
     }
     if (tpl >= 0) {
         sceHttpDeleteTemplate(tpl);
     }
-    free(chunk);
-    return status;
+    pthread_mutex_lock(&s_lock);
+    busy_release_locked();
+    pthread_mutex_unlock(&s_lock);
+    return ok;
+}
+
+http_session_t* http_session_open(const char* url)
+{
+    http_session_t* s;
+    bool inited;
+
+    if (!url) {
+        return NULL;
+    }
+
+    pthread_mutex_lock(&s_lock);
+    inited = ensure_init_locked();
+    if (inited) {
+        ++s_busy;
+    }
+    pthread_mutex_unlock(&s_lock);
+    if (!inited) {
+        return NULL;
+    }
+
+    s = (http_session_t*)calloc(1, sizeof(*s));
+    if (!s) {
+        goto err;
+    }
+    s->tpl = create_template();
+    if (s->tpl < 0) {
+        goto err;
+    }
+    s->conn = sceHttpCreateConnectionWithURL(s->tpl, url, 1 /* keepalive */);
+    if (s->conn < 0) {
+        LOG_ERROR("sceHttpCreateConnectionWithURL failed: 0x%08X", s->conn);
+        goto err;
+    }
+    return s;
+
+err:
+    if (s) {
+        if (s->tpl >= 0) {
+            sceHttpDeleteTemplate(s->tpl);
+        }
+        free(s);
+    }
+    pthread_mutex_lock(&s_lock);
+    busy_release_locked();
+    pthread_mutex_unlock(&s_lock);
+    return NULL;
+}
+
+void http_session_close(http_session_t* session)
+{
+    if (!session) {
+        return;
+    }
+    /* Delete while the busy reference still pins the http context. */
+    sceHttpDeleteConnection(session->conn);
+    sceHttpDeleteTemplate(session->tpl);
+    free(session);
+    pthread_mutex_lock(&s_lock);
+    busy_release_locked();
+    pthread_mutex_unlock(&s_lock);
 }
 
 void http_client_term(void)
 {
     pthread_mutex_lock(&s_lock);
-    force_term();
+    if (s_busy > 0) {
+        /* Requests/sessions still in flight; tear down when the last
+         * one finishes (see busy_release_locked). */
+        s_term_pending = true;
+    } else {
+        force_term_locked();
+    }
     pthread_mutex_unlock(&s_lock);
 }
 
@@ -304,6 +440,43 @@ bool http_client_get(const char* url, uint64_t offset, uint64_t length,
         return do_request(url, range, buf, bufsz, result, NULL, 0);
     }
     return do_request(url, NULL, buf, bufsz, result, NULL, 0);
+}
+
+bool http_client_get_session(http_session_t** psess, const char* url,
+                             uint64_t offset, uint64_t length,
+                             uint8_t* buf, size_t bufsz, http_result_t* result)
+{
+    char range[64];
+    const char* range_value = NULL;
+
+    if (!psess || !url || !result) {
+        return false;
+    }
+    if (length > 0) {
+        snprintf(range, sizeof(range), "bytes=%llu-%llu",
+                 (unsigned long long)offset,
+                 (unsigned long long)(offset + length - 1));
+        range_value = range;
+    }
+
+    if (!*psess) {
+        *psess = http_session_open(url);
+    }
+    if (*psess) {
+        if (request_with((*psess)->tpl, (*psess)->conn, url, range_value,
+                         buf, bufsz, result, NULL, 0)) {
+            return true;
+        }
+        /* Transport failure — likely a stale keep-alive connection:
+         * retry once with a fresh session. */
+        http_session_close(*psess);
+        *psess = http_session_open(url);
+        if (*psess) {
+            return request_with((*psess)->tpl, (*psess)->conn, url, range_value,
+                                buf, bufsz, result, NULL, 0);
+        }
+    }
+    return false;
 }
 
 bool http_client_probe(const char* url, uint64_t* total_size, bool* accepts_ranges)
