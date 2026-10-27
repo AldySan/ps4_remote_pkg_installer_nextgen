@@ -19,6 +19,7 @@
 #include "log.h"
 #include "netmon.h"
 #include "pkg.h"
+#include "proxy.h"
 #include "sfo.h"
 #include "taskman.h"
 #include "util.h"
@@ -116,6 +117,7 @@ static bool install_pieces(const char* const* urls, size_t url_count,
     pkg_entry_t entry;
     uint64_t* piece_sizes = NULL;
     uint64_t total_sum = 0;
+    bool proxy_ok = false;
     char digest_str[PKG_DIGEST_SIZE * 2 + 1];
     char mini_digest_str[(PKG_DIGEST_SIZE - 12) * 2 + 1];
     char ip[16];
@@ -252,19 +254,32 @@ static bool install_pieces(const char* const* urls, size_t url_count,
         }
     }
 
-    /* 4. piece sizes (piece 0 known from the header request). */
+    /* 4. piece sizes + Range support (piece 0 known from the header request). */
     piece_sizes = (uint64_t*)calloc(url_count, sizeof(uint64_t));
     if (!piece_sizes) {
         INSTALL_FAIL("out of memory");
     }
-    for (i = 0; i < url_count; ++i) {
-        if (!http_client_probe(urls[i], &piece_sizes[i], NULL)) {
-            INSTALL_FAIL("unable to probe '%s'", urls[i]);
+    {
+        bool* ranges_ok = (bool*)calloc(url_count, sizeof(bool));
+        if (!ranges_ok) {
+            INSTALL_FAIL("out of memory");
         }
-        if (piece_sizes[i] == 0) {
-            INSTALL_FAIL("piece %zu has unknown size", i);
+        for (i = 0; i < url_count; ++i) {
+            if (!http_client_probe(urls[i], &piece_sizes[i], &ranges_ok[i])) {
+                free(ranges_ok);
+                INSTALL_FAIL("unable to probe '%s'", urls[i]);
+            }
+            if (piece_sizes[i] == 0) {
+                free(ranges_ok);
+                INSTALL_FAIL("piece %zu has unknown size", i);
+            }
+            total_sum += piece_sizes[i];
         }
-        total_sum += piece_sizes[i];
+        /* Transfer acceleration: BGFT downloads pieces through our proxy
+         * (adaptive multi-segment prefetch). Falls back to the original
+         * URLs when the proxy registry is full. */
+        proxy_ok = proxy_register(job_id, urls, piece_sizes, ranges_ok, url_count);
+        free(ranges_ok);
     }
     if (hdr.package_size > 0 && total_sum != hdr.package_size) {
         INSTALL_FAIL("unexpected total file size (%llu != %llu) for '%s'",
@@ -287,10 +302,18 @@ static bool install_pieces(const char* const* urls, size_t url_count,
                 "\"numberOfSplitFiles\":%zu,\"pieces\":[",
                 (unsigned long long)hdr.package_size, digest_str, url_count);
         for (i = 0, total_sum = 0; i < url_count; ++i) {
+            char piece_url[600];
+            if (proxy_ok) {
+                snprintf(piece_url, sizeof(piece_url),
+                         "http://%s:%d/static/proxy/%d/%zu",
+                         ip, INSTALLER_PORT, job_id, i);
+            } else {
+                snprintf(piece_url, sizeof(piece_url), "%s", urls[i]);
+            }
             fprintf(f,
                     "{\"url\":\"%s\",\"fileOffset\":%llu,\"fileSize\":%llu,"
                     "\"hashValue\":\"%s\"}",
-                    urls[i], (unsigned long long)total_sum,
+                    piece_url, (unsigned long long)total_sum,
                     (unsigned long long)piece_sizes[i], mini_digest_str);
             if (i + 1 < url_count) {
                 fputs(",", f);
@@ -343,6 +366,9 @@ err:
     if (!status) {
         if (job_id >= 0 && task_id < 0) {
             taskman_set_state(job_id, TASK_STATE_FAILED, bgft_error);
+        }
+        if (proxy_ok) {
+            proxy_unregister(job_id);
         }
         unlink(manifest_path);
         unlink(icon_path);

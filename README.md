@@ -71,7 +71,7 @@ API milestone.
 - [x] Project skeleton, build system, CI
 - [x] Core services (logging, network monitor, storage info, pkg/SFO parsing, HTTP client)
 - [x] Transfer engine (BGFT wrappers, task manager, adaptive multi-segment prefetch)
-- [ ] HTTP server (legacy + v2 API)
+- [x] HTTP server (legacy API 1:1, v2 API, /static/ + accelerated piece proxy)
 - [ ] Live on-screen dashboard
 - [ ] Docs & polish
 
