@@ -64,6 +64,7 @@ static bool sfo_find(const void* sfo, size_t size, const char* key,
 {
     const uint8_t* p = (const uint8_t*)sfo;
     struct sfo_header hdr;
+    const size_t key_len = strlen(key);
     uint32_t i;
 
     if (!sfo_parse_header(sfo, size, &hdr)) {
@@ -85,11 +86,12 @@ static bool sfo_find(const void* sfo, size_t size, const char* key,
         entry.data_max_len = util_le32(e + 0x08);
         entry.data_offset  = util_le32(e + 0x0C);
 
-        if ((size_t)hdr.key_table_start + entry.key_offset + 1 > size) {
+        if ((size_t)hdr.key_table_start + entry.key_offset + key_len + 1 > size) {
+            /* Key would run past the buffer; not a match (and never read). */
             continue;
         }
         entry_key = (const char*)(p + hdr.key_table_start + entry.key_offset);
-        if (strncmp(entry_key, key, 0x40) == 0) {
+        if (strncmp(entry_key, key, key_len + 1) == 0) {
             *out_entry = entry;
             return true;
         }

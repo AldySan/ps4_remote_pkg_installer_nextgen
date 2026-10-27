@@ -70,13 +70,16 @@ static void stack_init(void)
 
 static void stack_term(void)
 {
+    int mem_id;
+
     if (!s_stack_ready) {
         return;
     }
     s_stack_ready = false;
+    mem_id = s_mem_id;
     s_mem_id = -1;
 
-    sceNetPoolDestroy(s_mem_id);
+    sceNetPoolDestroy(mem_id);
     sceNetTerm();
     sceNetCtlTerm();
 }
