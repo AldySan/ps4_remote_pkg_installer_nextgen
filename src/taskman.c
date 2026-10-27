@@ -41,6 +41,19 @@ static uint64_t now_ms(void)
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
 }
 
+static bool is_terminal_state(task_state_t state)
+{
+    switch (state) {
+        case TASK_STATE_COMPLETED:
+        case TASK_STATE_ALREADY_INSTALLED:
+        case TASK_STATE_FAILED:
+        case TASK_STATE_STOPPED:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static void slot_refresh_derived(struct taskman_slot* slot)
 {
     task_info_t* t = &slot->info;
@@ -215,6 +228,7 @@ int taskman_create(const char* url, bool is_ref)
 {
     int i;
     int id = -1;
+    struct taskman_slot* slot = NULL;
 
     if (!url) {
         return -1;
@@ -223,17 +237,32 @@ int taskman_create(const char* url, bool is_ref)
     pthread_mutex_lock(&s_lock);
     for (i = 0; i < TASKMAN_MAX_TASKS; ++i) {
         if (!s_slots[i].used) {
-            memset(&s_slots[i], 0, sizeof(s_slots[i]));
-            s_slots[i].used = true;
-            id = s_next_id++;
-            s_slots[i].info.id = id;
-            s_slots[i].info.bgft_task_id = -1;
-            s_slots[i].info.state = TASK_STATE_PENDING;
-            s_slots[i].info.speed_bps = 0.0;
-            s_slots[i].info.is_ref = is_ref;
-            snprintf(s_slots[i].info.url, sizeof(s_slots[i].info.url), "%s", url);
+            slot = &s_slots[i];
             break;
         }
+    }
+    if (!slot) {
+        /* Registry full: reclaim the oldest terminal-state slot so new
+         * installs keep working without an app restart (the dashboard
+         * keeps showing the most recent jobs). */
+        for (i = 0; i < TASKMAN_MAX_TASKS; ++i) {
+            if (s_slots[i].used && is_terminal_state(s_slots[i].info.state)) {
+                if (!slot || s_slots[i].info.id < slot->info.id) {
+                    slot = &s_slots[i];
+                }
+            }
+        }
+    }
+    if (slot) {
+        memset(slot, 0, sizeof(*slot));
+        slot->used = true;
+        id = s_next_id++;
+        slot->info.id = id;
+        slot->info.bgft_task_id = -1;
+        slot->info.state = TASK_STATE_PENDING;
+        slot->info.speed_bps = 0.0;
+        slot->info.is_ref = is_ref;
+        snprintf(slot->info.url, sizeof(slot->info.url), "%s", url);
     }
     pthread_mutex_unlock(&s_lock);
 
@@ -393,6 +422,12 @@ bool taskman_set_registered(int id, int bgft_task_id, const char* content_id,
             snprintf(slot->info.icon_path, sizeof(slot->info.icon_path), "%s", icon_path);
         }
         ok = true;
+        if (slot->info.state == TASK_STATE_ALREADY_INSTALLED) {
+            /* Nothing will download: drop the temp manifest/icon and
+             * fire the terminal event so the proxy slot is released. */
+            task_cleanup_files(&slot->info);
+            notify_terminal(&slot->info);
+        }
     }
     pthread_mutex_unlock(&s_lock);
     return ok;
