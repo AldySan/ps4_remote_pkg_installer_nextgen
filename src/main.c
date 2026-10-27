@@ -9,10 +9,14 @@
  */
 
 #include "version.h"
+#include "appinst.h"
+#include "bgft.h"
+#include "installer.h"
 #include "log.h"
 #include "modules.h"
 #include "netmon.h"
 #include "storage.h"
+#include "taskman.h"
 #include "util.h"
 
 #include <orbis/Sysmodule.h>
@@ -132,6 +136,17 @@ int main(void)
         LOG_WARN("netmon failed to start; continuing without network");
     }
 
+    /* Install stack: AppInstUtil + BGFT + task registry with progress poller. */
+    if (!appinst_init()) {
+        LOG_WARN("appinst init failed; uninstall APIs disabled");
+    }
+    if (!bgft_init()) {
+        LOG_WARN("bgft init failed; installs disabled");
+    }
+    if (!taskman_start()) {
+        LOG_WARN("taskman failed to start; progress tracking disabled");
+    }
+
     {
         uint64_t free_bytes = 0;
         char free_str[32];
@@ -162,6 +177,9 @@ int main(void)
     SDL_DestroyWindow(s_window);
     SDL_Quit();
 
+    taskman_stop();
+    bgft_fini();
+    appinst_fini();
     netmon_stop();
 
     sceUserServiceTerminate();

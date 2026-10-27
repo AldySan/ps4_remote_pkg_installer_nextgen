@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -147,3 +148,36 @@ int sceBgftServiceDownloadFindTaskByContentId(const char* contentId,
 #ifdef __cplusplus
 }
 #endif
+
+/* ------------------------------------------------------------------ */
+/* NextGen wrappers around the ABI above (src/bgft.c).                   */
+/* ------------------------------------------------------------------ */
+
+bool bgft_init(void);
+void bgft_fini(void);
+
+/* Foreground user id (needed for task registration), -1 on failure. */
+int bgft_get_user_id(void);
+
+/*
+ * Registers a download task with legacy semantics: when the app is
+ * already installed, reports success with *out_task_id == -1.
+ */
+bool bgft_register(const char* content_id, const char* content_url,
+                   const char* content_name, const char* icon_path,
+                   const char* package_type, const char* package_sub_type,
+                   uint64_t package_size, bool is_patch,
+                   int* out_task_id, int* error);
+
+bool bgft_start_task(int task_id, int* error);
+bool bgft_pause_task(int task_id, int* error);
+bool bgft_resume_task(int task_id, int* error);
+bool bgft_stop_task(int task_id, int* error);
+bool bgft_unregister_task(int task_id, int* error);
+bool bgft_reregister_patch(int old_task_id, int* new_task_id, int* error);
+
+bool bgft_get_progress(int task_id, SceBgftTaskProgress* progress, int* error);
+
+/* Maps to sceBgftServiceDownloadFindTaskByContentId (legacy find_task). */
+bool bgft_find_task(const char* content_id, int sub_type, int* task_id,
+                    int* error);
