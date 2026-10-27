@@ -372,6 +372,7 @@ err:
         }
         unlink(manifest_path);
         unlink(icon_path);
+        out->bgft_error = bgft_error;
     }
     free(hdr_buf);
     free(table_buf);

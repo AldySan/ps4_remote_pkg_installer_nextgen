@@ -405,14 +405,17 @@ static void handle_api_install(OrbisNetId fd, const char* body, size_t body_len)
                  result.task_id, title_esc);
         conn_send_str(fd, resp);
     } else {
-        if (result.job_id >= 0 && result.task_id == 0) {
+        if (result.bgft_error != 0) {
+            /* BGFT-level failure: byte-compatible with the original
+             * (HTTP 200 + error_code, e.g. registration rejected). */
+            resp_error_code(fd, result.bgft_error);
+        } else if (result.job_id >= 0) {
             /* transport-level failure with a message */
             char esc[600];
             json_escape(err, esc, sizeof(esc));
             resp_error(fd, 500, "Internal server error", esc);
         } else {
-            /* BGFT-level failure with a code */
-            resp_error_code(fd, result.task_id != 0 ? 0 : 0x80010016);
+            resp_error_code(fd, 0x80010016);
         }
     }
     cJSON_Delete(root);
@@ -933,9 +936,7 @@ static void route(OrbisNetId fd, const char* method, const char* path,
             if (slash) {
                 handle_v2_job_op(fd, id, slash + 1);
             } else {
-                char sub[16];
-                snprintf(sub, sizeof(sub), "%s", rest);
-                handle_v2_jobs(fd, sub);
+                handle_v2_jobs(fd, rest);
             }
             return;
         }
@@ -1293,16 +1294,22 @@ void server_stop(void)
     }
     pthread_join(s_thread, NULL);
 
-    /* Wait briefly for in-flight connection threads to finish. */
-    for (;;) {
-        int active;
-        pthread_mutex_lock(&s_lock);
-        active = s_active_conns;
-        pthread_mutex_unlock(&s_lock);
-        if (active <= 0) {
-            break;
+    /* Wait briefly (bounded) for in-flight connection threads. They are
+     * detached, so stragglers (e.g. a send stuck on a dead link) finish on
+     * their own; blocking here forever would stall the netmon thread and
+     * prevent network-up recovery. */
+    {
+        int waits;
+        for (waits = 0; waits < 100; ++waits) { /* 100 x 50ms = 5s max */
+            int active;
+            pthread_mutex_lock(&s_lock);
+            active = s_active_conns;
+            pthread_mutex_unlock(&s_lock);
+            if (active <= 0) {
+                break;
+            }
+            usleep(50 * 1000);
         }
-        usleep(50 * 1000);
     }
     s_port = 0;
     LOG_INFO("server stopped");
