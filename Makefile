@@ -52,7 +52,7 @@ CFLAGS      := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c $(EXTRA
                -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include \
                -isystem $(TPDIR)/cJSON -isystem $(TPDIR)/dbglogger
 LDFLAGS     := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr \
-               -L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
+               -Lthirdparty/stubs -L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
 
 # Create the intermediate directory in case it doesn't already exist.
 _unused     := $(shell mkdir -p $(INTDIR))
@@ -71,7 +71,7 @@ ifeq ($(UNAME_S),Darwin)
 	CDIR     := macos
 endif
 
-.PHONY: all clean
+.PHONY: all clean test
 
 all: $(CONTENT_ID).pkg
 
@@ -80,6 +80,11 @@ $(CONTENT_ID).pkg: pkg.gp4
 
 pkg.gp4: eboot.bin sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png sce_sys/pic0.png sce_sys/pic1.png $(LIBMODULES) $(ASSETS)
 	$(TOOLCHAIN)/bin/$(CDIR)/create-gp4 -out $@ --content-id=$(CONTENT_ID) --files "$^"
+
+# Custom libSceBgft stub (app-facing sceBgftDownload* symbols missing
+# from the stock toolchain stub; see thirdparty/stubs/bgft_stub.c).
+thirdparty/stubs/libSceBgft.so: $(TPDIR)/stubs/bgft_stub.c
+	$(CC) --target=x86_64-pc-freebsd12-elf -fPIC -shared -nostdlib -o $@ $<
 
 sce_sys/about/right.sprx:
 	mkdir -p sce_sys/about
@@ -99,7 +104,7 @@ sce_sys/param.sfo: Makefile
 	$(TOOLCHAIN)/bin/$(CDIR)/PkgTool.Core sfo_setentry $@ TITLE_ID --type Utf8 --maxsize 12 --value '$(TITLE_ID)'
 	$(TOOLCHAIN)/bin/$(CDIR)/PkgTool.Core sfo_setentry $@ VERSION --type Utf8 --maxsize 8 --value '$(VERSION)'
 
-eboot.bin: $(INTDIR) $(OBJS)
+eboot.bin: $(INTDIR) $(OBJS) thirdparty/stubs/libSceBgft.so
 	$(LD) $(INTDIR)/*.o -o $(OUTDIR)/$(notdir $(CURDIR)).elf $(LDFLAGS)
 	$(TOOLCHAIN)/bin/$(CDIR)/create-fself -in=$(OUTDIR)/$(notdir $(CURDIR)).elf -out=$(OUTDIR)/eboot.oelf --eboot "eboot.bin" --paid 0x3800000000000011 --authinfo 000000000000000000000000001C004000FF000000000080000000000000000000000000000000000000008000400040000000000000008000000000000000080040FFFF000000F000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 
@@ -112,7 +117,19 @@ $(INTDIR)/tp_$(notdir $(basename $(1))).o: $(1)
 endef
 $(foreach s,$(TPSRCS),$(eval $(call TP_RULE,$(s))))
 
+# Host unit tests for the portable core (util/sfo/pkg).
+# HOSTCC can be overridden, e.g. make test HOSTCC=clang
+HOSTCC ?= cc
+TEST_SRCS := src/util.c src/sfo.c src/pkg.c tools/host_tests.c
+
+.PHONY: test
+test:
+	$(HOSTCC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 -Isrc \
+		-o build/host_tests $(TEST_SRCS)
+	./build/host_tests tests/data
+
 clean:
 	rm -f $(CONTENT_ID).pkg pkg.gp4 sce_sys/param.sfo eboot.bin \
+		thirdparty/stubs/libSceBgft.so \
                 $(OUTDIR)/*.elf $(OUTDIR)/*.oelf $(OBJS)
 	rm -rf sce_sys/about $(INTDIR)

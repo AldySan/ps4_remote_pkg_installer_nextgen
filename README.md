@@ -69,11 +69,23 @@ API milestone.
 ## Roadmap
 
 - [x] Project skeleton, build system, CI
-- [ ] Core services (logging, network monitor, storage info)
+- [x] Core services (logging, network monitor, storage info, pkg/SFO parsing, HTTP client)
 - [ ] Transfer engine (BGFT + staged multi-segment downloader)
 - [ ] HTTP server (legacy + v2 API)
 - [ ] Live on-screen dashboard
 - [ ] Docs & polish
+
+## Development
+
+Host unit tests cover the portable core (util/SFO/pkg parsing) and run on
+every push:
+
+```sh
+make test
+```
+
+Fixtures in `tests/data/` are generated from a real build (`param.sfo` and
+the first 0x3000 bytes of a real package header).
 
 ## Credits
 

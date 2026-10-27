@@ -11,12 +11,18 @@
 #include "version.h"
 #include "log.h"
 #include "modules.h"
+#include "netmon.h"
+#include "storage.h"
+#include "util.h"
 
 #include <orbis/Sysmodule.h>
 #include <orbis/_types/sysmodule.h>
 #include <orbis/UserService.h>
 
 #include <SDL2/SDL.h>
+
+#include <stdint.h>
+#include <stdio.h>
 
 size_t sceLibcHeapSize = 256 * 1024 * 1024;
 
@@ -117,6 +123,26 @@ int main(void)
         goto err_window_destroy;
     }
 
+    /*
+     * Network monitor: keeps polling in the background. The app stays
+     * alive with no network (the original build exited here) and services
+     * start automatically once a link is available.
+     */
+    if (!netmon_start()) {
+        LOG_WARN("netmon failed to start; continuing without network");
+    }
+
+    {
+        uint64_t free_bytes = 0;
+        char free_str[32];
+        if (storage_get_free(&free_bytes)) {
+            util_format_size(free_bytes, free_str, sizeof(free_str));
+            LOG_INFO("storage: %s free on /data", free_str);
+        } else {
+            LOG_WARN("storage: free space unknown");
+        }
+    }
+
     LOG_INFO("render loop started (skeleton smoke screen)");
 
     while (s_running) {
@@ -135,6 +161,8 @@ int main(void)
     SDL_DestroyRenderer(s_renderer);
     SDL_DestroyWindow(s_window);
     SDL_Quit();
+
+    netmon_stop();
 
     sceUserServiceTerminate();
     modules_unload();

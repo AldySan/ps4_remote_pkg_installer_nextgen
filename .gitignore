@@ -19,3 +19,4 @@ sce_sys/about/
 ## Python (tools)
 __pycache__/
 *.pyc
+thirdparty/stubs/*.so
