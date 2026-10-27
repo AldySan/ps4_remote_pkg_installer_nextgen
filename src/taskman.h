@@ -86,6 +86,10 @@ bool taskman_set_registered(int id, int bgft_task_id, const char* content_id,
                             bool is_patch, bool has_icon,
                             const char* manifest_path, const char* icon_path);
 
+/* Terminal-state event hook (invoked outside the registry lock). */
+typedef void (*taskman_event_t)(int job_id, task_state_t state, void* arg);
+void taskman_on_event(taskman_event_t cb, void* arg);
+
 /* Control ops (map to BGFT calls and update state accordingly). */
 bool taskman_pause(int id, int* error);
 bool taskman_resume(int id, int* error);

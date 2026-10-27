@@ -31,6 +31,9 @@ static bool s_running = false;
 static int s_next_id = 1;
 static struct taskman_slot s_slots[TASKMAN_MAX_TASKS];
 
+static taskman_event_t s_event_cb = NULL;
+static void* s_event_arg = NULL;
+
 static uint64_t now_ms(void)
 {
     struct timespec ts;
@@ -60,6 +63,13 @@ static void slot_refresh_derived(struct taskman_slot* slot)
     }
     slot->last_poll_transferred = t->transferred_total;
     slot->last_poll_tick_ms = now_ms();
+}
+
+static void notify_terminal(const task_info_t* t)
+{
+    if (s_event_cb) {
+        s_event_cb(t->id, t->state, s_event_arg);
+    }
 }
 
 static void task_cleanup_files(const task_info_t* t)
@@ -99,6 +109,7 @@ static void poll_task(struct taskman_slot* slot)
             }
             LOG_INFO("task #%d (bgft %d) left the queue: state=%d",
                      t->id, t->bgft_task_id, (int)t->state);
+            notify_terminal(t);
         }
         slot->last_progress_ok = false;
         return;
@@ -126,6 +137,7 @@ static void poll_task(struct taskman_slot* slot)
             task_cleanup_files(t);
             LOG_ERROR("task #%d (bgft %d) failed: 0x%08X",
                       t->id, t->bgft_task_id, progress.errorResult);
+            notify_terminal(t);
         }
         return;
     }
@@ -325,6 +337,12 @@ void taskman_foreach(taskman_visit_t cb, void* arg)
         }
     }
     pthread_mutex_unlock(&s_lock);
+}
+
+void taskman_on_event(taskman_event_t cb, void* arg)
+{
+    s_event_cb = cb;
+    s_event_arg = arg;
 }
 
 bool taskman_set_state(int id, task_state_t state, int error)

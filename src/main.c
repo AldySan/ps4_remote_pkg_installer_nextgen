@@ -11,10 +11,13 @@
 #include "version.h"
 #include "appinst.h"
 #include "bgft.h"
+#include "http_client.h"
 #include "installer.h"
 #include "log.h"
 #include "modules.h"
 #include "netmon.h"
+#include "proxy.h"
+#include "server.h"
 #include "storage.h"
 #include "taskman.h"
 #include "util.h"
@@ -35,6 +38,36 @@ static SDL_Renderer* s_renderer = NULL;
 static SDL_GameController* s_controller = NULL;
 
 static bool s_running = true;
+
+static void on_netmon_event(void* arg, bool up)
+{
+    (void)arg;
+    if (up) {
+        if (!server_is_running()) {
+            server_start(APP_DEFAULT_PORT);
+        }
+    } else {
+        http_client_term();
+        if (server_is_running()) {
+            server_stop();
+        }
+    }
+}
+
+static void on_task_event(int job_id, task_state_t state, void* arg)
+{
+    (void)arg;
+    switch (state) {
+        case TASK_STATE_COMPLETED:
+        case TASK_STATE_FAILED:
+        case TASK_STATE_STOPPED:
+        case TASK_STATE_ALREADY_INSTALLED:
+            proxy_unregister(job_id);
+            break;
+        default:
+            break;
+    }
+}
 
 static void handle_event(const SDL_Event* ev)
 {
@@ -146,6 +179,11 @@ int main(void)
     if (!taskman_start()) {
         LOG_WARN("taskman failed to start; progress tracking disabled");
     }
+    taskman_on_event(on_task_event, NULL);
+    netmon_subscribe(on_netmon_event, NULL);
+    if (netmon_is_up()) {
+        on_netmon_event(NULL, true);
+    }
 
     {
         uint64_t free_bytes = 0;
@@ -177,6 +215,7 @@ int main(void)
     SDL_DestroyWindow(s_window);
     SDL_Quit();
 
+    server_stop();
     taskman_stop();
     bgft_fini();
     appinst_fini();
