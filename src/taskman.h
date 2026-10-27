@@ -38,6 +38,7 @@ typedef struct task_info {
     task_state_t state;
     int error;                         /* last BGFT/system error, 0 = none */
     char url[TASK_URL_MAX];
+    bool is_ref;                      /* url is a reference manifest */
     char content_id[TASK_CONTENT_ID_MAX];
     char title[TASK_TITLE_MAX];
     uint64_t package_size;
@@ -68,7 +69,7 @@ bool taskman_start(void);
 void taskman_stop(void);
 
 /* Creates a job (state PENDING) and returns its id (or -1). */
-int taskman_create(const char* url);
+int taskman_create(const char* url, bool is_ref);
 
 /* Looks a job up by our id or by BGFT task id; copies a snapshot. */
 bool taskman_get(int id, task_info_t* out);
