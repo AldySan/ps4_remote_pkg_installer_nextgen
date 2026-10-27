@@ -239,7 +239,10 @@ static bool do_request(const char* url, const char* range_value,
                 }
             }
 
-            /* Read the body in chunks; store up to bufsz bytes. */
+            /* Read the body in chunks; store up to bufsz bytes.
+             * Mirrors the original: stop once the requested amount is
+             * buffered (Range responses are exact; deleting the request
+             * closes anything the server still tries to send). */
             for (;;) {
                 size_t want = HTTP_CHUNK_SIZE;
                 int n = sceHttpReadData(req, chunk, want);
@@ -256,8 +259,8 @@ static bool do_request(const char* url, const char* range_value,
                     memcpy(buf + stored, chunk, cp);
                     stored += cp;
                 }
-                if (buf && stored >= bufsz) {
-                    /* Buffer full; drain the rest to close cleanly. */
+                if (!buf || stored >= bufsz) {
+                    break;
                 }
             }
             result->body_len = stored;
