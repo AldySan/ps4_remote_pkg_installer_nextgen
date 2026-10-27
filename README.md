@@ -44,10 +44,23 @@ grab the `.pkg` from the workflow artifacts.
 ## Usage
 
 1. Install the package on your PS4 (HEN must be active).
-2. Launch it — the dashboard shows the console's IP and server status.
-3. Keep the app in focus while sending commands (same as the original).
-4. Once a transfer is registered it continues in the background via the
-   system's BGFT download manager.
+2. Launch it — the dashboard shows the console's IP, storage and transfers.
+3. Send installs from any device on the same network (see below). The
+   app works with or without a network link: the server starts
+   automatically once a link is available, and the app never exits on
+   its own.
+4. Transfers run through the system's BGFT download manager — they
+   continue even after the app closes.
+
+### On-screen controls
+
+| Button | Action |
+|---|---|
+| D-pad up/down | Select transfer |
+| X (cross) | Pause / resume the selected transfer |
+| O (circle) | Stop the selected transfer |
+| [ ] (square) | Re-transfer (re-run a completed/failed/stopped transfer) |
+| OPTIONS | Exit |
 
 ### Quick start (from a PC)
 
@@ -59,12 +72,16 @@ curl http://<PS4-IP>:12800/api/v2/system
 curl -v 'http://<PS4-IP>:12800/api/install' \
   --data '{"type":"direct","packages":["http://<PC-IP>:8080/UP0001-CUSA09311_00-GAME.pkg"]}'
 
-# Watch progress
+# Watch progress (speed, percent, ETA)
 curl 'http://<PS4-IP>:12800/api/v2/jobs'
+
+# Pause / resume / stop a job
+curl 'http://<PS4-IP>:12800/api/v2/jobs/1/pause' -X POST
+curl 'http://<PS4-IP>:12800/api/v2/jobs/1/resume' -X POST
+curl 'http://<PS4-IP>:12800/api/v2/jobs/1/stop' -X POST
 ```
 
-The full API reference (legacy + v2) will be documented in `docs/API.md` with the
-API milestone.
+The full API reference (legacy + v2) is documented in [docs/API.md](docs/API.md).
 
 ## Roadmap
 
@@ -73,7 +90,7 @@ API milestone.
 - [x] Transfer engine (BGFT wrappers, task manager, adaptive multi-segment prefetch)
 - [x] HTTP server (legacy API 1:1, v2 API, /static/ + accelerated piece proxy)
 - [x] Live on-screen dashboard (status strip, transfer cards, activity log, controller controls)
-- [ ] Docs & polish
+- [x] Docs & polish ([API reference](docs/API.md))
 
 ## Development
 
@@ -86,6 +103,22 @@ make test
 
 Fixtures in `tests/data/` are generated from a real build (`param.sfo` and
 the first 0x3000 bytes of a real package header).
+
+Regenerate the embedded bitmap font after changing the generator:
+
+```sh
+python3 tools/gen_font.py   # requires Pillow
+```
+
+Project layout:
+
+```
+src/            application code (C11, no framework)
+thirdparty/     vendored cJSON + dbglogger (MIT), custom libSceBgft stub
+tools/          asset/font generators, host unit tests
+tests/data/     unit test fixtures
+docs/API.md     HTTP API reference (legacy + v2)
+```
 
 ## Credits
 
