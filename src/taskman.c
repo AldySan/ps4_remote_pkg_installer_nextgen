@@ -211,7 +211,7 @@ void taskman_stop(void)
      * BGFT keeps downloading after the app exits (same as the original). */
 }
 
-int taskman_create(const char* url)
+int taskman_create(const char* url, bool is_ref)
 {
     int i;
     int id = -1;
@@ -230,6 +230,7 @@ int taskman_create(const char* url)
             s_slots[i].info.bgft_task_id = -1;
             s_slots[i].info.state = TASK_STATE_PENDING;
             s_slots[i].info.speed_bps = 0.0;
+            s_slots[i].info.is_ref = is_ref;
             snprintf(s_slots[i].info.url, sizeof(s_slots[i].info.url), "%s", url);
             break;
         }

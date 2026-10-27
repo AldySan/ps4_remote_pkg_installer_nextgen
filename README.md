@@ -72,7 +72,7 @@ API milestone.
 - [x] Core services (logging, network monitor, storage info, pkg/SFO parsing, HTTP client)
 - [x] Transfer engine (BGFT wrappers, task manager, adaptive multi-segment prefetch)
 - [x] HTTP server (legacy API 1:1, v2 API, /static/ + accelerated piece proxy)
-- [ ] Live on-screen dashboard
+- [x] Live on-screen dashboard (status strip, transfer cards, activity log, controller controls)
 - [ ] Docs & polish
 
 ## Development

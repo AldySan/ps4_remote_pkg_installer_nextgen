@@ -20,6 +20,7 @@
 #include "server.h"
 #include "storage.h"
 #include "taskman.h"
+#include "ui.h"
 #include "util.h"
 
 #include <orbis/Sysmodule.h>
@@ -89,9 +90,10 @@ static void handle_event(const SDL_Event* ev)
             }
             break;
         case SDL_CONTROLLERBUTTONDOWN:
-            /* Options button exits the smoke screen (early skeleton only). */
             if (ev->cbutton.button == SDL_CONTROLLER_BUTTON_START) {
-                s_running = false;
+                s_running = false; /* OPTIONS exits */
+            } else {
+                ui_handle_button(ev->cbutton.button);
             }
             break;
         default:
@@ -101,26 +103,7 @@ static void handle_event(const SDL_Event* ev)
 
 static void draw_frame(void)
 {
-    Uint32 t = SDL_GetTicks();
-
-    /* Background: dark tech theme (#0D1117). */
-    SDL_SetRenderDrawColor(s_renderer, 0x0D, 0x11, 0x17, 0xFF);
-    SDL_RenderClear(s_renderer);
-
-    /* Animated heartbeat bar: proves the render loop is alive. */
-    int bar_w = 480;
-    int bar_h = 4;
-    int x = (1920 - bar_w) / 2;
-    int y = 1080 / 2;
-    double phase = (t % 2000) / 2000.0;
-    int fill_w = (int)(bar_w * ((phase < 0.5) ? (phase * 2.0) : ((1.0 - phase) * 2.0)));
-
-    SDL_SetRenderDrawColor(s_renderer, 0x21, 0x26, 0x2D, 0xFF);
-    SDL_RenderFillRect(s_renderer, &(SDL_Rect){ x, y, bar_w, bar_h });
-    SDL_SetRenderDrawColor(s_renderer, 0x39, 0xD2, 0xC0, 0xFF);
-    SDL_RenderFillRect(s_renderer, &(SDL_Rect){ x, y, fill_w, bar_h });
-
-    SDL_RenderPresent(s_renderer);
+    ui_frame(s_renderer);
 }
 
 int main(void)
@@ -160,6 +143,11 @@ int main(void)
         goto err_window_destroy;
     }
 
+    if (!ui_init(s_renderer)) {
+        LOG_ERROR("ui_init failed: %s", SDL_GetError());
+        goto err_window_destroy;
+    }
+
     /*
      * Network monitor: keeps polling in the background. The app stays
      * alive with no network (the original build exited here) and services
@@ -196,7 +184,7 @@ int main(void)
         }
     }
 
-    LOG_INFO("render loop started (skeleton smoke screen)");
+    LOG_INFO("dashboard running");
 
     while (s_running) {
         SDL_Event ev;
@@ -216,6 +204,7 @@ int main(void)
     SDL_Quit();
 
     server_stop();
+    ui_fini();
     taskman_stop();
     bgft_fini();
     appinst_fini();

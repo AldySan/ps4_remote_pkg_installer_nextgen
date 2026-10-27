@@ -100,7 +100,7 @@ static bool write_all_bytes(const char* path, const uint8_t* data, size_t size)
  * Shared pipeline for a validated list of piece URLs.
  * On failure the job is marked FAILED and tmp files are removed.
  */
-static bool install_pieces(const char* const* urls, size_t url_count,
+static bool install_pieces(const char* const* urls, size_t url_count, bool is_ref,
                            install_result_t* out, char* err, size_t errsz)
 {
     int job_id = -1;
@@ -136,7 +136,7 @@ static bool install_pieces(const char* const* urls, size_t url_count,
     err[0] = '\0';
     memset(out, 0, sizeof(*out));
 
-    job_id = taskman_create(urls[0]);
+    job_id = taskman_create(urls[0], is_ref);
     if (job_id < 0) {
         INSTALL_FAIL("task registry full");
     }
@@ -400,7 +400,7 @@ bool installer_install_direct(const char* const* urls, size_t url_count,
             return false;
         }
     }
-    return install_pieces(urls, url_count, out, err, errsz);
+    return install_pieces(urls, url_count, false, out, err, errsz);
 }
 
 bool installer_install_ref_pkg_url(const char* url, install_result_t* out,
@@ -487,7 +487,7 @@ bool installer_install_ref_pkg_url(const char* url, install_result_t* out,
         }
     }
 
-    status = install_pieces((const char* const*)urls, count, out, err, errsz);
+    status = install_pieces((const char* const*)urls, count, true, out, err, errsz);
 
 err:
     if (urls) {
