@@ -43,7 +43,7 @@ Success (task id `-1` means the application is already installed):
 ```
 
 Failures return either `{"status": "fail", "error": "message"}` (HTTP 500)
-or `{"status": "fail", "error_code": "0x80990088"}` (HTTP 200), matching
+or `{"status": "fail", "error_code": 0x80990088}` (HTTP 200), matching
 the original wire format.
 
 > **Transfer acceleration** — pieces are streamed through the app's
@@ -60,23 +60,24 @@ the original wire format.
 ```json
 {
   "status": "success",
-  "bits": "0x0", "error": "0",
-  "length": "0x0", "transferred": "0x0",
-  "length_total": "0x1A2B3C00", "transferred_total": "0x1234000",
-  "num_index": "0", "num_total": "1",
-  "rest_sec": "120", "rest_sec_total": "120",
-  "preparing_percent": "100", "local_copy_percent": "0"
+  "bits": 0x0, "error": 0,
+  "length": 0x0, "transferred": 0x0,
+  "length_total": 0x1A2B3C00, "transferred_total": 0x1234000,
+  "num_index": 0, "num_total": 1,
+  "rest_sec": 120, "rest_sec_total": 120,
+  "preparing_percent": 100, "local_copy_percent": 0
 }
 ```
 
-(Lengths are hex strings; counters/percent are decimal — identical to the
-original.)
+(All values are unquoted JSON numbers — lengths as hex, counters and
+percent as decimal — identical to the original wire format. `error` is
+the BGFT error result.)
 
 ### Task control
 
 `POST /api/start_task` / `stop_task` / `pause_task` / `resume_task` /
 `unregister_task` — all take `{ "task_id": N }` and return
-`{"status": "success"}` or `{"status": "fail", "error_code": "0x..."}`.
+`{"status": "success"}` or `{"status": "fail", "error_code": 0x...}`.
 
 ### `POST /api/find_task`
 
@@ -94,11 +95,11 @@ BGFT sub types (6 = game, 7 = additional content, 8 = patch, ...).
 ```
 
 ```json
-{ "status": "success", "exists": "true", "size": "0x1A2B3C00" }
+{ "status": "success", "exists": "true", "size": 0x1A2B3C00 }
 ```
 
-`size` (hex string, installed size in bytes) is only present when the
-application exists.
+`size` (unquoted hex number, installed size in bytes) is only present
+when the application exists.
 
 ### Uninstall endpoints
 
@@ -138,6 +139,8 @@ BGFT. `..` and `:/` are rejected.
   }
 }
 ```
+
+`GET /` is an alias for this endpoint (handy for a quick server check).
 
 ### `POST /api/v2/install`
 
@@ -199,6 +202,10 @@ Per-item transfer control (same actions as the on-screen dashboard
 buttons). Returns `{"status": "success"}` or
 `{"status": "fail", "error_code": ...}`.
 
+`GET` on the same paths is also accepted, for backward compatibility
+with clients written against v0.0.2 and earlier (where only `GET` was
+routed); new clients should use `POST`.
+
 ### `GET /api/v2/storage`
 
 ```json
@@ -225,9 +232,9 @@ Last 64 log entries (level + message):
   exactly like the original.
 - Error bodies: parameter problems return HTTP 500 with
   `{ "status": "fail", "error": "message" }`; BGFT-level failures return
-  HTTP 200 with `{ "status": "fail", "error_code": "0x........" }`.
-- `is_exists` returns `"exists"` as a string and the size as a hex string,
-  matching the original.
+  HTTP 200 with `{ "status": "fail", "error_code": 0x........ }`.
+- `is_exists` returns `"exists"` as a string and the size as an unquoted
+  hex number, matching the original.
 - Already-installed installs report success with `task_id: -1`.
 - Every response carries `Access-Control-Allow-Origin: *` and
   `Connection: close`.
