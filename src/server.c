@@ -364,6 +364,11 @@ static void handle_api_install(OrbisNetId fd, const char* body, size_t body_len)
             return;
         }
         urls = (char**)calloc(count, sizeof(char*));
+        if (!urls) {
+            cJSON_Delete(root);
+            resp_error(fd, 500, "Internal server error", "Out of memory.");
+            return;
+        }
         const cJSON* it = NULL;
         cJSON_ArrayForEach(it, packages) {
             if (cJSON_IsString(it) && it->valuestring[0] != '\0') {
@@ -873,6 +878,11 @@ static void handle_v2_install(OrbisNetId fd, const char* body, size_t body_len)
             char** list = (char**)calloc(count, sizeof(char*));
             size_t i = 0;
             const cJSON* it = NULL;
+            if (!list) {
+                cJSON_Delete(root);
+                resp_error(fd, 500, "Internal server error", "Out of memory.");
+                return;
+            }
             cJSON_ArrayForEach(it, urls) {
                 if (cJSON_IsString(it) && it->valuestring[0] != '\0' && i < count) {
                     list[i++] = strdup(it->valuestring);
