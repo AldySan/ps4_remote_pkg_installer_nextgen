@@ -50,7 +50,7 @@ OBJS        := $(patsubst $(PROJDIR)/%.c, $(INTDIR)/%.o, $(CFILES)) \
 # Define final C flags
 CFLAGS      := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c $(EXTRAFLAGS) \
                -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include \
-               -isystem $(TPDIR)/cJSON -isystem $(TPDIR)/dbglogger
+               -isystem $(TPDIR)/cJSON -isystem $(TPDIR)/dbglogger -isystem $(TPDIR)/stb
 LDFLAGS     := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr \
                -Lthirdparty/stubs -L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
 
