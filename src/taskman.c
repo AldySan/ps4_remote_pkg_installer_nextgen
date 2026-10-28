@@ -111,12 +111,16 @@ static void poll_task(struct taskman_slot* slot)
     }
 
     if (!bgft_get_progress(t->bgft_task_id, &progress, &error)) {
-        if (slot->last_progress_ok && t->state == TASK_STATE_RUNNING) {
-            /* Task finished and was unregistered by BGFT. */
+        if (slot->last_progress_ok &&
+            (t->state == TASK_STATE_RUNNING || t->state == TASK_STATE_REGISTERED ||
+             t->state == TASK_STATE_PAUSED)) {
+            /* Task finished and was unregistered by BGFT (this also covers
+             * tasks removed from the queue while paused or still queued:
+             * otherwise their slots would never reach a terminal state). */
             if (t->length_total > 0 && t->transferred_total >= t->length_total) {
                 t->state = TASK_STATE_COMPLETED;
                 task_cleanup_files(t);
-            } else if (t->state != TASK_STATE_STOPPED) {
+            } else {
                 t->state = TASK_STATE_STOPPED;
                 task_cleanup_files(t);
             }
@@ -155,7 +159,11 @@ static void poll_task(struct taskman_slot* slot)
         return;
     }
 
-    if (t->state == TASK_STATE_REGISTERED || t->state == TASK_STATE_PAUSED) {
+    /* A queued (REGISTERED) task becomes RUNNING once BGFT starts moving
+     * bytes. PAUSED is deliberately left alone: it only returns to RUNNING
+     * via an explicit resume (a paused task has transferred_total > 0, so
+     * promoting it here would undo every pause within one poll). */
+    if (t->state == TASK_STATE_REGISTERED) {
         if (t->transferred_total > 0 || t->preparing_percent >= 100) {
             t->state = TASK_STATE_RUNNING;
         }
@@ -394,7 +402,9 @@ bool taskman_set_state(int id, task_state_t state, int error)
 bool taskman_set_registered(int id, int bgft_task_id, const char* content_id,
                             const char* title, uint64_t package_size,
                             bool is_patch, bool has_icon,
-                            const char* manifest_path, const char* icon_path)
+                            const char* manifest_path, const char* icon_path,
+                            const char* app_ver, const char* content_type,
+                            uint32_t piece_count)
 {
     struct taskman_slot* slot;
     bool ok = false;
@@ -411,6 +421,14 @@ bool taskman_set_registered(int id, int bgft_task_id, const char* content_id,
         if (title) {
             snprintf(slot->info.title, sizeof(slot->info.title), "%s", title);
         }
+        if (app_ver) {
+            snprintf(slot->info.app_ver, sizeof(slot->info.app_ver), "%s", app_ver);
+        }
+        if (content_type) {
+            snprintf(slot->info.content_type, sizeof(slot->info.content_type),
+                     "%s", content_type);
+        }
+        slot->info.piece_count = piece_count;
         slot->info.package_size = package_size;
         slot->info.is_patch = is_patch;
         slot->info.has_icon = has_icon;

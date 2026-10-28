@@ -29,8 +29,10 @@ typedef enum task_state {
 } task_state_t;
 
 #define TASK_TITLE_MAX   256
-#define TASK_URL_MAX     512
+#define TASK_URL_MAX     2048  /* long signed URLs (S3/Azure) must fit */
 #define TASK_CONTENT_ID_MAX 40
+#define TASK_APP_VER_MAX 16
+#define TASK_CONTENT_TYPE_MAX 8
 
 typedef struct task_info {
     int id;                            /* our job id (v2 API) */
@@ -41,6 +43,9 @@ typedef struct task_info {
     bool is_ref;                      /* url is a reference manifest */
     char content_id[TASK_CONTENT_ID_MAX];
     char title[TASK_TITLE_MAX];
+    char app_ver[TASK_APP_VER_MAX];      /* SFO APP_VER, e.g. "01.02" */
+    char content_type[TASK_CONTENT_TYPE_MAX]; /* "PS4GD", "PS4AC", ... */
+    uint32_t piece_count;               /* pkg split piece count (>= 1) */
     uint64_t package_size;
     bool is_patch;
     bool has_icon;
@@ -85,7 +90,9 @@ bool taskman_set_state(int id, task_state_t state, int error);
 bool taskman_set_registered(int id, int bgft_task_id, const char* content_id,
                             const char* title, uint64_t package_size,
                             bool is_patch, bool has_icon,
-                            const char* manifest_path, const char* icon_path);
+                            const char* manifest_path, const char* icon_path,
+                            const char* app_ver, const char* content_type,
+                            uint32_t piece_count);
 
 /* Terminal-state event hook. NOTE: invoked with the registry lock held
  * (and possibly other locks on top); callbacks must not call back into
