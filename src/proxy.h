@@ -20,12 +20,10 @@ bool proxy_register(int job_id, const char* const* urls,
                     const uint64_t* sizes, const bool* ranges_ok,
                     size_t count);
 
-/* Drops a job's proxy state (aborts an active stream if any). */
+/* Drops a job's proxy state. A live stream is aborted (its serving
+ * connection owns it and frees it via proxy_stream_close); the piece
+ * table is released. */
 void proxy_unregister(int job_id);
-
-/* Piece info for the HTTP handler. */
-bool proxy_get_piece(int job_id, size_t piece, char* url_out, size_t url_sz,
-                     uint64_t* size_out);
 
 /*
  * Opens a streaming handle for a piece (starts the prefetch engine).
@@ -38,5 +36,9 @@ void* proxy_stream_open(int job_id, size_t piece, uint64_t* total_size);
 /* Reads the next block of the stream (0 at EOF, -1 on error). */
 int64_t proxy_stream_read(void* stream, uint8_t* buf, size_t len);
 
-/* Aborts and frees a stream handle. */
-void proxy_stream_close(void* stream);
+/*
+ * Frees a stream handle (its serving connection owns the stream).
+ * job_id lets the registry drop its reference first, so a concurrent
+ * piece change or unregister can never abort or double-free it.
+ */
+void proxy_stream_close(int job_id, void* stream);
