@@ -122,6 +122,7 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
     char mini_digest_str[(PKG_DIGEST_SIZE - 12) * 2 + 1];
     char ip[16];
     char title[256];
+    char app_ver[16] = "";
     const char* package_type;
     int task_id = -1;
     int bgft_error = 0;
@@ -246,6 +247,14 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
             title[0] == '\0') {
             INSTALL_FAIL("unable to get title for '%s'", urls[0]);
         }
+        /* Package version: APP_VER (PS4 standard), older pkgs: VERSION. */
+        if (!sfo_get_string(sfo_buf, sfo_size, "APP_VER", app_ver, sizeof(app_ver)) ||
+            app_ver[0] == '\0') {
+            if (!sfo_get_string(sfo_buf, sfo_size, "VERSION", app_ver, sizeof(app_ver)) ||
+                app_ver[0] == '\0') {
+                app_ver[0] = '\0'; /* absent on some pkgs: shown as "-" */
+            }
+        }
         if (icon_buf && icon_size > 0) {
             if (!write_all_bytes(icon_path, icon_buf, icon_size)) {
                 INSTALL_FAIL("unable to write icon0.png for '%s'", urls[0]);
@@ -349,7 +358,8 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
     taskman_set_registered(job_id, task_id, hdr.content_id, title,
                            hdr.package_size, pkg_is_patch(hdr.content_flags),
                            has_icon, manifest_path,
-                           has_icon ? icon_url_path : NULL);
+                           has_icon ? icon_url_path : NULL,
+                           app_ver, package_type, (uint32_t)url_count);
 
     out->task_id = task_id;
     snprintf(out->title, sizeof(out->title), "%s", title);
@@ -357,8 +367,9 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
     out->package_size = hdr.package_size;
     out->is_patch = pkg_is_patch(hdr.content_flags);
 
-    LOG_INFO("install registered: job=%d bgft=%d title='%s' size=%llu",
-             job_id, task_id, title, (unsigned long long)hdr.package_size);
+    LOG_INFO("install registered: job=%d bgft=%d title='%s' ver=%s size=%llu",
+             job_id, task_id, title, app_ver[0] ? app_ver : "-",
+             (unsigned long long)hdr.package_size);
 
     status = true;
 
