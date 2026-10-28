@@ -199,6 +199,10 @@ Per-item transfer control (same actions as the on-screen dashboard
 buttons). Returns `{"status": "success"}` or
 `{"status": "fail", "error_code": ...}`.
 
+`GET` on the same paths is also accepted, for backward compatibility
+with clients written against v0.0.2 and earlier (where only `GET` was
+routed); new clients should use `POST`.
+
 ### `GET /api/v2/storage`
 
 ```json
