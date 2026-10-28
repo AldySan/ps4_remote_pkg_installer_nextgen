@@ -66,22 +66,25 @@ static int s_active_conns = 0;
 /* Connection write helpers                                            */
 /* ------------------------------------------------------------------ */
 
-static void conn_send(OrbisNetId fd, const void* data, size_t len)
+/* Sends a buffer; returns false when the connection is gone so callers
+ * can stop pulling data for a dead client (e.g. a stopped download). */
+static bool conn_send(OrbisNetId fd, const void* data, size_t len)
 {
     const uint8_t* p = (const uint8_t*)data;
     while (len > 0) {
         int n = sceNetSend(fd, p, len, 0);
         if (n <= 0) {
-            return;
+            return false;
         }
         p += n;
         len -= (size_t)n;
     }
+    return true;
 }
 
-static void conn_send_str(OrbisNetId fd, const char* s)
+static bool conn_send_str(OrbisNetId fd, const char* s)
 {
-    conn_send(fd, s, strlen(s));
+    return conn_send(fd, s, strlen(s));
 }
 
 /* ------------------------------------------------------------------ */
@@ -213,7 +216,9 @@ static void serve_static_file(OrbisNetId fd, const char* name)
     buf = (uint8_t*)malloc(SERVER_SEND_CHUNK);
     if (buf) {
         while ((n = fread(buf, 1, SERVER_SEND_CHUNK, f)) > 0) {
-            conn_send(fd, buf, n);
+            if (!conn_send(fd, buf, n)) {
+                break; /* client is gone */
+            }
         }
         free(buf);
     }
@@ -247,14 +252,16 @@ static void serve_proxy_piece(OrbisNetId fd, int job_id, size_t piece)
 
     buf = (uint8_t*)malloc(SERVER_SEND_CHUNK);
     if (!buf) {
-        proxy_stream_close(stream);
+        proxy_stream_close(job_id, stream);
         return;
     }
     while ((n = proxy_stream_read(stream, buf, SERVER_SEND_CHUNK)) > 0) {
-        conn_send(fd, buf, (size_t)n);
+        if (!conn_send(fd, buf, (size_t)n)) {
+            break; /* client is gone: stop pulling from the origin */
+        }
     }
     free(buf);
-    proxy_stream_close(stream);
+    proxy_stream_close(job_id, stream);
 
     if (n < 0) {
         LOG_WARN("proxy: stream for job %d piece %zu failed mid-transfer",
@@ -357,6 +364,11 @@ static void handle_api_install(OrbisNetId fd, const char* body, size_t body_len)
             return;
         }
         urls = (char**)calloc(count, sizeof(char*));
+        if (!urls) {
+            cJSON_Delete(root);
+            resp_error(fd, 500, "Internal server error", "Out of memory.");
+            return;
+        }
         const cJSON* it = NULL;
         cJSON_ArrayForEach(it, packages) {
             if (cJSON_IsString(it) && it->valuestring[0] != '\0') {
@@ -675,12 +687,16 @@ static void v2_task_json(const task_info_t* t, char* out, size_t outsz)
     snprintf(out, outsz,
              "{\"id\":%d,\"bgft_task_id\":%d,\"state\":\"%s\","
              "\"title\":\"%s\",\"content_id\":\"%s\","
+             "\"app_ver\":\"%s\",\"content_type\":\"%s\",\"pieces\":%u,"
              "\"package_size\":%llu,"
              "\"transferred\":%llu,\"length_total\":%llu,"
              "\"percent\":%d,\"speed_bps\":%.0f,"
              "\"is_patch\":%s,\"error\":%d,"
              "\"rest_sec\":%u,\"num_index\":%u,\"num_total\":%u}",
              t->id, t->bgft_task_id, state, title_esc, t->content_id,
+             t->app_ver[0] ? t->app_ver : "",
+             t->content_type[0] ? t->content_type : "",
+             t->piece_count,
              (unsigned long long)t->package_size,
              (unsigned long long)t->transferred_total,
              (unsigned long long)t->length_total,
@@ -862,6 +878,11 @@ static void handle_v2_install(OrbisNetId fd, const char* body, size_t body_len)
             char** list = (char**)calloc(count, sizeof(char*));
             size_t i = 0;
             const cJSON* it = NULL;
+            if (!list) {
+                cJSON_Delete(root);
+                resp_error(fd, 500, "Internal server error", "Out of memory.");
+                return;
+            }
             cJSON_ArrayForEach(it, urls) {
                 if (cJSON_IsString(it) && it->valuestring[0] != '\0' && i < count) {
                     list[i++] = strdup(it->valuestring);

@@ -14,7 +14,7 @@
 #include <string.h>
 
 #define PROXY_MAX_JOBS     32
-#define PROXY_URL_MAX      512
+#define PROXY_URL_MAX      2048  /* must hold long signed piece URLs */
 
 #define PROXY_BIG_PIECE    (8u * 1024u * 1024u)   /* switch to parallel above */
 #define PROXY_CONN_SMALL   1
@@ -31,10 +31,12 @@ struct proxy_job {
     int job_id;
     size_t count;
     struct proxy_piece* pieces;
-    /* Active stream (one per job; BGFT reads pieces sequentially). */
-    bool stream_open;
-    int stream_piece;
+    /* Reference to the stream currently serving this job (NOT owned by
+     * the registry): the serving connection owns the stream and frees it
+     * via proxy_stream_close. Kept only so a piece change or job teardown
+     * can abort it; always cleared under s_lock before it is freed. */
     prefetch_t* stream_pf;
+    int stream_piece;
 };
 
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -113,15 +115,13 @@ void proxy_unregister(int job_id)
     job = find_job(job_id);
     if (job) {
         if (job->stream_pf) {
-            prefetch_t* pf = job->stream_pf;
+            /* Abort the live stream so its serving connection unwinds and
+             * frees it (it owns the stream). Never free it here: the poll
+             * thread calls this, and prefetch_free joins the workers. */
+            prefetch_abort(job->stream_pf);
             job->stream_pf = NULL;
-            job->stream_open = false;
-            job->stream_piece = -1;
-            /* prefetch_free joins workers; call without the lock. */
-            pthread_mutex_unlock(&s_lock);
-            prefetch_free(pf);
-            pthread_mutex_lock(&s_lock);
         }
+        job->stream_piece = -1;
         free(job->pieces);
         job->pieces = NULL;
         job->used = false;
@@ -130,36 +130,11 @@ void proxy_unregister(int job_id)
     pthread_mutex_unlock(&s_lock);
 }
 
-bool proxy_get_piece(int job_id, size_t piece, char* url_out, size_t url_sz,
-                     uint64_t* size_out)
-{
-    struct proxy_job* job;
-    bool ok = false;
-
-    if (!url_out || url_sz == 0) {
-        return false;
-    }
-    url_out[0] = '\0';
-
-    pthread_mutex_lock(&s_lock);
-    job = find_job(job_id);
-    if (job && piece < job->count) {
-        snprintf(url_out, url_sz, "%s", job->pieces[piece].url);
-        if (size_out) {
-            *size_out = job->pieces[piece].size;
-        }
-        ok = true;
-    }
-    pthread_mutex_unlock(&s_lock);
-    return ok;
-}
-
 void* proxy_stream_open(int job_id, size_t piece, uint64_t* total_size)
 {
     char url[PROXY_URL_MAX];
     uint64_t size = 0;
     bool ranges_ok = false;
-    prefetch_t* old_pf = NULL;
     prefetch_t* pf;
     struct proxy_job* job;
     int conns = PROXY_CONN_SMALL;
@@ -173,19 +148,17 @@ void* proxy_stream_open(int job_id, size_t piece, uint64_t* total_size)
         size = job->pieces[piece].size;
         ranges_ok = job->pieces[piece].ranges_ok;
         if (job->stream_pf && job->stream_piece != (int)piece) {
-            /* Retire the previous stream (BGFT moved on). */
-            old_pf = job->stream_pf;
+            /* BGFT moved on: abort the previous stream (aborted reads
+             * fail immediately, so its connection unwinds and frees it).
+             * Aborting under the lock orders this against the owner's
+             * proxy_stream_close, which clears the ref before freeing. */
+            prefetch_abort(job->stream_pf);
             job->stream_pf = NULL;
-            job->stream_open = false;
             job->stream_piece = -1;
         }
     }
     pthread_mutex_unlock(&s_lock);
 
-    if (old_pf) {
-        prefetch_abort(old_pf);
-        prefetch_free(old_pf);
-    }
     if (size == 0 || url[0] == '\0') {
         return NULL;
     }
@@ -212,14 +185,12 @@ void* proxy_stream_open(int job_id, size_t piece, uint64_t* total_size)
     }
     if (!job->stream_pf) {
         job->stream_pf = pf;
-        job->stream_open = true;
         job->stream_piece = (int)piece;
-        pthread_mutex_unlock(&s_lock);
-    } else {
-        /* Another stream for the same piece won the race; serve this one
-         * detached (freed by proxy_stream_close). */
-        pthread_mutex_unlock(&s_lock);
     }
+    /* else: another stream for the same piece is already registered; this
+     * one is detached and freed by its own connection via
+     * proxy_stream_close. */
+    pthread_mutex_unlock(&s_lock);
 
     if (total_size) {
         *total_size = size;
@@ -235,10 +206,22 @@ int64_t proxy_stream_read(void* stream, uint8_t* buf, size_t len)
     return prefetch_read((prefetch_t*)stream, buf, len);
 }
 
-void proxy_stream_close(void* stream)
+void proxy_stream_close(int job_id, void* stream)
 {
-    if (!stream) {
+    prefetch_t* pf = (prefetch_t*)stream;
+    struct proxy_job* job;
+
+    if (!pf) {
         return;
     }
-    prefetch_free((prefetch_t*)stream);
+    /* Drop the registry's reference first (under the lock) so nothing can
+     * abort or double-free the stream we are about to own-free. */
+    pthread_mutex_lock(&s_lock);
+    job = find_job(job_id);
+    if (job && job->stream_pf == pf) {
+        job->stream_pf = NULL;
+        job->stream_piece = -1;
+    }
+    pthread_mutex_unlock(&s_lock);
+    prefetch_free(pf);
 }

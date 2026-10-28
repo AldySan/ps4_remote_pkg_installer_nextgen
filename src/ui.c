@@ -5,6 +5,7 @@
  */
 #include "ui.h"
 #include "font.h"
+#include "icon.h"
 #include "installer.h"
 #include "log.h"
 #include "netmon.h"
@@ -47,9 +48,32 @@
 #define UI_LOG_LINES 7
 #define UI_MAX_JOBS  32
 
+/* Pkg info presentation. */
+#define UI_ICON_BOX     96   /* icon box in a card */
+#define UI_ICON_BIG     128  /* icon box in the details panel */
+#define UI_DETAIL_H     168  /* expandable details panel height */
+#define UI_ICON_CACHE   16   /* decoded icon textures kept around */
+
 static int s_selected = 0;
 static int s_scroll = 0;
 static Uint32 s_last_action = 0;
+static bool s_details = false;      /* TRI: expand selected card's pkg info */
+static SDL_Renderer* s_renderer = NULL;
+
+/* Decoded icon textures, keyed by job id + icon path. Decoding is
+ * intentionally budgeted to one new icon per frame so a batch of new
+ * jobs cannot stall the render loop. */
+struct icon_slot {
+    int job_id;
+    char path[64];
+    SDL_Texture* tex;
+    int w, h;
+    bool tried;
+    uint32_t last_used;
+};
+static struct icon_slot s_icon_cache[UI_ICON_CACHE];
+static uint32_t s_frame_seq = 0;
+static int s_icon_budget = 0;
 
 static void fill_rect(SDL_Renderer* r, int x, int y, int w, int h,
                       int cr, int cg, int cb, int ca)
@@ -161,6 +185,138 @@ static bool ui_collect_cb(const task_info_t* t, void* arg)
 }
 
 /* ------------------------------------------------------------------ */
+/* Pkg icon cache + info helpers                                       */
+/* ------------------------------------------------------------------ */
+
+/* BGFT-facing icon path is /user/data/...; the app reads the same file
+ * through its own /data/... mount. */
+static const char* icon_local_path(const char* p)
+{
+    if (strncmp(p, "/user/data/", 11) == 0) {
+        return p + 5;
+    }
+    return p;
+}
+
+/* Returns the job's icon texture (NULL while not yet decoded / none).
+ * Decodes at most one new icon per frame (see s_icon_budget). */
+static SDL_Texture* icon_texture(const task_info_t* t, int* out_w, int* out_h)
+{
+    struct icon_slot* slot = NULL;
+    struct icon_slot* victim = &s_icon_cache[0];
+    int i;
+
+    if (!t->has_icon || t->icon_path[0] == '\0') {
+        return NULL;
+    }
+
+    for (i = 0; i < UI_ICON_CACHE; ++i) {
+        struct icon_slot* s = &s_icon_cache[i];
+        if (s->job_id == t->id && strcmp(s->path, t->icon_path) == 0) {
+            slot = s;
+            break;
+        }
+        if (!s->tried && !s->tex) {
+            slot = s; /* free slot, keep looking for an exact match */
+        }
+        if (s->last_used < victim->last_used) {
+            victim = s;
+        }
+    }
+    if (!slot) {
+        slot = victim; /* evict least recently used */
+        if (slot->tex) {
+            SDL_DestroyTexture(slot->tex);
+        }
+        slot->job_id = t->id;
+        snprintf(slot->path, sizeof(slot->path), "%s", t->icon_path);
+        slot->tex = NULL;
+        slot->tried = false;
+    }
+
+    if (!slot->tried) {
+        if (s_icon_budget <= 0) {
+            return NULL; /* next frame */
+        }
+        --s_icon_budget;
+        slot->tried = true;
+        slot->tex = icon_load(s_renderer, icon_local_path(t->icon_path),
+                              &slot->w, &slot->h);
+    }
+
+    slot->last_used = s_frame_seq;
+    if (out_w) {
+        *out_w = slot->w;
+    }
+    if (out_h) {
+        *out_h = slot->h;
+    }
+    return slot->tex;
+}
+
+/* Draws an icon (aspect-fit) inside a bordered box; "PKG" placeholder
+ * when there is no decodable icon. */
+static void draw_icon_box(SDL_Renderer* r, SDL_Texture* tex, int tw, int th,
+                          int x, int y, int box)
+{
+    fill_rect(r, x, y, box, box, COL_PANEL2);
+    draw_rect(r, x, y, box, box, COL_BORDER);
+
+    if (tex) {
+        int max_w = box - 12;
+        int max_h = box - 12;
+        int w = max_w;
+        int h = max_h;
+        if ((int64_t)tw * max_h > (int64_t)th * max_w) {
+            h = (int)(((int64_t)th * max_w + tw / 2) / (tw ? tw : 1));
+        } else {
+            w = (int)(((int64_t)tw * max_h + th / 2) / (th ? th : 1));
+        }
+        if (w > 0 && h > 0) {
+            SDL_Rect dst = { x + (box - w) / 2, y + (box - h) / 2, w, h };
+            SDL_RenderCopy(r, tex, NULL, &dst);
+        }
+    } else {
+        const char* s = "PKG";
+        font_draw(r, x + (box - 3 * font_advance(UI_SCALE_SM)) / 2,
+                  y + (box - font_height(UI_SCALE_SM)) / 2,
+                  UI_SCALE_SM, TXT_DIM, s);
+    }
+}
+
+/* "IV0000-CUSA01234_00-XXXXXXXXXXXXXXXX" -> "CUSA01234". */
+static void title_id_from_content_id(const char* cid, char* out, size_t outsz)
+{
+    const char* d1;
+    const char* d2;
+
+    out[0] = '\0';
+    if (!cid[0]) {
+        return;
+    }
+    d1 = strchr(cid, '-');
+    if (!d1) {
+        snprintf(out, outsz, "%s", cid);
+        return;
+    }
+    d2 = strchr(d1 + 1, '-');
+    if (!d2) {
+        snprintf(out, outsz, "%s", d1 + 1);
+        return;
+    }
+    snprintf(out, outsz, "%.*s", (int)(d2 - (d1 + 1)), d1 + 1);
+}
+
+/* One "KEY value" row; returns the y of the next row. */
+static int draw_kv(SDL_Renderer* r, int x, int y, const char* key,
+                   const char* value, uint32_t value_col)
+{
+    int ex = font_draw(r, x, y, UI_SCALE_SM, TXT_DIM, key);
+    font_draw(r, ex + 14, y, UI_SCALE_SM, value_col, value);
+    return y + font_height(UI_SCALE_SM) + 9;
+}
+
+/* ------------------------------------------------------------------ */
 /* Panels                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -215,7 +371,8 @@ static void draw_status(SDL_Renderer* r)
     font_drawf(r, 1500, y + 20, UI_SCALE, TXT_DIM, "JOBS %d", jobs);
 }
 
-static void draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected)
+static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected,
+                     bool expanded)
 {
     char title[256];
     char line[256];
@@ -223,6 +380,7 @@ static void draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selecte
     char trans_str[48];
     char speed_str[48];
     char eta_str[16];
+    char ver_str[24];
     uint32_t state_col = state_text_color(t->state);
     int sr, sg, sb;
     int x = 48;
@@ -230,6 +388,10 @@ static void draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selecte
     int bar_y;
     int bar_w;
     int i;
+    int tx = x + UI_ICON_BOX + 32; /* text starts right of the icon */
+    SDL_Texture* icon_tex;
+    int icon_w = 0;
+    int icon_h = 0;
 
     state_rgb(t->state, &sr, &sg, &sb);
 
@@ -242,37 +404,46 @@ static void draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selecte
         draw_rect(r, x, y, w, UI_CARD_H, COL_BORDER);
     }
 
+    /* Icon. */
+    icon_tex = icon_texture(t, &icon_w, &icon_h);
+    draw_icon_box(r, icon_tex, icon_w, icon_h, x + 16, y + 22, UI_ICON_BOX);
+
     /* Title + state. */
     snprintf(title, sizeof(title), "%s", t->title[0] ? t->title : "(untitled)");
-    font_fit(title, sizeof(title), w - 500, UI_SCALE);
-    font_draw(r, x + 24, y + 12, UI_SCALE, TXT_TEXT, title);
+    font_fit(title, sizeof(title), w - (tx - x) - 500, UI_SCALE);
+    font_draw(r, tx, y + 12, UI_SCALE, TXT_TEXT, title);
     {
         const char* st = state_name(t->state);
         font_draw(r, x + w - 24 - (int)strlen(st) * font_advance(UI_SCALE),
                   y + 12, UI_SCALE, state_col, st);
     }
 
-    /* Info line. */
+    /* Info line: content id, version, patch flag, size, ids. */
     util_format_size(t->package_size, size_str, sizeof(size_str));
-    snprintf(line, sizeof(line), "%s%s   %s   job #%d   bgft %d",
+    if (t->app_ver[0]) {
+        snprintf(ver_str, sizeof(ver_str), "  v%s", t->app_ver);
+    } else {
+        ver_str[0] = '\0';
+    }
+    snprintf(line, sizeof(line), "%s%s%s   %s   job #%d   bgft %d",
              t->content_id[0] ? t->content_id : "-",
              t->is_patch ? "  [PATCH]" : "",
-             size_str, t->id, t->bgft_task_id);
-    font_fit(line, sizeof(line), w - 48, UI_SCALE_SM);
-    font_draw(r, x + 24, y + 60, UI_SCALE_SM, TXT_DIM, line);
+             ver_str, size_str, t->id, t->bgft_task_id);
+    font_fit(line, sizeof(line), w - (tx - x) - 360, UI_SCALE_SM);
+    font_draw(r, tx, y + 60, UI_SCALE_SM, TXT_DIM, line);
 
     /* Progress bar. */
     bar_y = y + 92;
-    bar_w = w - 320;
-    fill_rect(r, x + 24, bar_y, bar_w, 18, COL_TRACK);
+    bar_w = w - (tx - x) - 320;
+    fill_rect(r, tx, bar_y, bar_w, 18, COL_TRACK);
     if (t->percent > 0) {
         int fill_w = (bar_w * t->percent) / 100;
         if (fill_w > bar_w) {
             fill_w = bar_w;
         }
-        fill_rect(r, x + 24, bar_y, fill_w, 18, sr, sg, sb, 0xFF);
-        for (i = 24; i < fill_w; i += 28) {
-            fill_rect(r, x + 24 + i, bar_y, 3, 18, COL_BG);
+        fill_rect(r, tx, bar_y, fill_w, 18, sr, sg, sb, 0xFF);
+        for (i = 0; i < fill_w; i += 28) {
+            fill_rect(r, tx + i + 24, bar_y, 3, 18, COL_BG);
         }
     }
 
@@ -280,17 +451,90 @@ static void draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selecte
     util_format_size(t->transferred_total, trans_str, sizeof(trans_str));
     format_speed(t->speed_bps, speed_str, sizeof(speed_str));
     format_eta(t->rest_sec_total, eta_str, sizeof(eta_str));
-    font_drawf(r, x + 24 + bar_w + 24, y + 60, UI_SCALE_SM, TXT_TEXT,
+    font_drawf(r, tx + bar_w + 24, y + 60, UI_SCALE_SM, TXT_TEXT,
                "%d%%", t->percent);
-    font_drawf(r, x + 24 + bar_w + 24, y + 90, UI_SCALE_SM, TXT_DIM,
+    font_drawf(r, tx + bar_w + 24, y + 90, UI_SCALE_SM, TXT_DIM,
                "%s %s", speed_str, eta_str);
-    font_drawf(r, x + 24 + bar_w + 24, y + 114, UI_SCALE_SM, TXT_DIM,
+    font_drawf(r, tx + bar_w + 24, y + 114, UI_SCALE_SM, TXT_DIM,
                "%s of %s", trans_str, size_str);
 
     if (selected) {
-        font_draw(r, x + 24, y + UI_CARD_H - 6, UI_SCALE_SM, TXT_DIM,
-                  "X pause/resume   O stop   [ ] re-transfer");
+        font_draw(r, tx, y + UI_CARD_H - 6, UI_SCALE_SM, TXT_DIM,
+                  "X pause/resume   O stop   [ ] re-transfer   TRI details");
     }
+
+    if (!expanded) {
+        return UI_CARD_H;
+    }
+
+    /* ---- Expandable details panel: full pkg information ---- */
+    {
+        char val[600];
+        char title_id[24];
+        int dy = y + UI_CARD_H;
+        int dx = x + UI_ICON_BIG + 48;
+        int dw = w - (dx - x) - 24;
+        int col_w = (dw - 32) / 2;
+        int x2 = dx + col_w + 32;
+        int ry = dy + 16;
+
+        fill_rect(r, x, dy, w, UI_DETAIL_H, COL_PANEL);
+        draw_rect(r, x, dy, w, UI_DETAIL_H, COL_BORDER);
+
+        draw_icon_box(r, icon_tex, icon_w, icon_h, x + 24, dy + 20, UI_ICON_BIG);
+
+        /* Left column. */
+        snprintf(val, sizeof(val), "%s", t->app_ver[0] ? t->app_ver : "-");
+        ry = draw_kv(r, dx, ry, "VERSION", val, TXT_TEXT);
+        title_id_from_content_id(t->content_id, title_id, sizeof(title_id));
+        snprintf(val, sizeof(val), "%s", title_id[0] ? title_id : "-");
+        ry = draw_kv(r, dx, ry, "TITLE ID", val, TXT_TEXT);
+        snprintf(val, sizeof(val), "%s", t->content_id[0] ? t->content_id : "-");
+        font_fit(val, sizeof(val), col_w - 10 * font_advance(UI_SCALE_SM) - 14,
+                 UI_SCALE_SM);
+        ry = draw_kv(r, dx, ry, "CONTENT ID", val, TXT_TEXT);
+        snprintf(val, sizeof(val), "%s%s",
+                 t->content_type[0] ? t->content_type : "-",
+                 t->is_patch ? "  (patch)" : "");
+        draw_kv(r, dx, ry, "TYPE", val, TXT_TEXT);
+
+        /* Right column. */
+        ry = dy + 16;
+        ry = draw_kv(r, x2, ry, "SIZE", size_str, TXT_TEXT);
+        if (t->piece_count > 0) {
+            snprintf(val, sizeof(val), "%u", t->piece_count);
+        } else {
+            snprintf(val, sizeof(val), "-");
+        }
+        ry = draw_kv(r, x2, ry, "PIECES", val, TXT_TEXT);
+        snprintf(val, sizeof(val), "%s   eta %s", speed_str, eta_str);
+        ry = draw_kv(r, x2, ry, "SPEED", val, TXT_TEXT);
+        draw_kv(r, x2, ry, "STATE", state_name(t->state), state_col);
+
+        /* Source URL (full width) + error when present. */
+        ry += 6;
+        snprintf(val, sizeof(val), "%s", t->url[0] ? t->url : "-");
+        if (t->piece_count > 1) {
+            char more[48];
+            snprintf(more, sizeof(more), "  (+%u more)", t->piece_count - 1);
+            strncat(val, more, sizeof(val) - strlen(val) - 1);
+        }
+        font_fit(val, sizeof(val),
+                 dw - 14 * font_advance(UI_SCALE_SM) - (t->error ? 280 : 0),
+                 UI_SCALE_SM);
+        font_draw(r, dx, ry, UI_SCALE_SM, TXT_DIM, "SOURCE");
+        font_draw(r, dx + 14 * font_advance(UI_SCALE_SM), ry, UI_SCALE_SM,
+                  TXT_TEXT, val);
+
+        if (t->error) {
+            char err_str[32];
+            snprintf(err_str, sizeof(err_str), "ERROR 0x%08X", t->error);
+            font_draw(r, x + w - 24 - (int)strlen(err_str) * font_advance(UI_SCALE_SM),
+                      dy + UI_DETAIL_H - font_height(UI_SCALE_SM) - 12,
+                      UI_SCALE_SM, TXT_RED, err_str);
+        }
+    }
+    return UI_CARD_H + UI_DETAIL_H;
 }
 
 static void draw_jobs(SDL_Renderer* r)
@@ -299,7 +543,8 @@ static void draw_jobs(SDL_Renderer* r)
     int y = UI_HEADER_H + UI_STATUS_H + 20;
     int log_h = UI_LOG_LINES * (font_height(UI_SCALE_SM) + 6) + 34;
     int area_bottom = UI_H - UI_FOOTER_H - log_h - 12 - 20;
-    int visible = (area_bottom - y) / (UI_CARD_H + UI_CARD_GAP + 16);
+    int card_h = UI_CARD_H + (s_details ? UI_DETAIL_H : 0);
+    int visible = (area_bottom - y) / (card_h + UI_CARD_GAP + 16);
     int i;
 
     if (visible < 1) {
@@ -332,8 +577,9 @@ static void draw_jobs(SDL_Renderer* r)
     }
 
     for (i = s_scroll; i < jobs.count && i < s_scroll + visible; ++i) {
-        draw_card(r, &jobs.items[i], y, i == s_selected);
-        y += UI_CARD_H + UI_CARD_GAP + 16;
+        int h = draw_card(r, &jobs.items[i], y, i == s_selected,
+                          i == s_selected && s_details);
+        y += h + UI_CARD_GAP + 16;
     }
 
     if (jobs.count > visible) {
@@ -383,7 +629,7 @@ static void draw_footer(SDL_Renderer* r)
     fill_rect(r, 0, UI_H - UI_FOOTER_H, UI_W, UI_FOOTER_H, COL_PANEL);
     fill_rect(r, 0, UI_H - UI_FOOTER_H, UI_W, 2, COL_BORDER);
     font_draw(r, 48, UI_H - UI_FOOTER_H + 18, UI_SCALE_SM, TXT_DIM,
-              "dpad select    X pause/resume    O stop    [ ] re-transfer    OPTIONS exit");
+              "dpad select    X pause/resume    O stop    [ ] re-transfer    TRI details    OPTIONS exit");
 }
 
 /* ------------------------------------------------------------------ */
@@ -529,6 +775,9 @@ void ui_handle_button(int button)
         case SDL_CONTROLLER_BUTTON_X:
             action_retry();
             break;
+        case SDL_CONTROLLER_BUTTON_Y:
+            s_details = !s_details;
+            break;
         default:
             break;
     }
@@ -536,16 +785,29 @@ void ui_handle_button(int button)
 
 bool ui_init(SDL_Renderer* renderer)
 {
+    s_renderer = renderer;
     return font_init(renderer);
 }
 
 void ui_fini(void)
 {
+    int i;
+    for (i = 0; i < UI_ICON_CACHE; ++i) {
+        if (s_icon_cache[i].tex) {
+            SDL_DestroyTexture(s_icon_cache[i].tex);
+        }
+        s_icon_cache[i].tex = NULL;
+        s_icon_cache[i].tried = false;
+        s_icon_cache[i].job_id = -1;
+    }
     font_fini();
 }
 
 void ui_frame(SDL_Renderer* r)
 {
+    ++s_frame_seq;
+    s_icon_budget = 1; /* at most one icon decode per frame */
+
     SDL_SetRenderDrawColor(r, 0x0D, 0x11, 0x17, 0xFF);
     SDL_RenderClear(r);
 

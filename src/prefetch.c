@@ -35,7 +35,7 @@ enum chunk_state {
 };
 
 struct prefetch {
-    char url[512];
+    char url[2048];
     uint64_t total_size;
     int connections;
 
