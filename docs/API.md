@@ -169,6 +169,7 @@ or `{ "urls": ["...piece0.pkg", "...piece1.pkg"] }` or
       {
         "id": 1, "bgft_task_id": 42, "state": "running",
         "title": "GAME NAME", "content_id": "UP0001-...",
+        "app_ver": "01.02", "content_type": "PS4GD", "pieces": 3,
         "package_size": 439715840,
         "transferred": 138412032, "length_total": 439715840,
         "percent": 31, "speed_bps": 11258991,
@@ -182,6 +183,11 @@ or `{ "urls": ["...piece0.pkg", "...piece1.pkg"] }` or
 
 States: `pending`, `preparing`, `registered`, `running`, `paused`,
 `completed`, `already_installed`, `failed`, `stopped`.
+
+Job metadata: `app_ver` is the package version from its PARAM.SFO
+(`APP_VER`, falling back to `VERSION`; empty when absent), `content_type`
+is the pkg type (`PS4GD` game, `PS4AC` additional content, `PS4AL`,
+`PS4DP`), and `pieces` is the number of split pkg files being transferred.
 
 ### `GET /api/v2/jobs/<id>`
 

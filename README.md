@@ -11,6 +11,7 @@ pause/resume/stop/re-transfer controls per item, storage status, and an activity
 ## Highlights
 
 - **Live dashboard UI** (dark tech theme) — no more static splash screen
+- **Full pkg info on every card** — icon, title, version, content id, type, size
 - **Per-item controls** — pause, resume, stop, and re-transfer each transfer
 - **Stability first** — works with or without a network connection; the server
   starts automatically once a link is available, and the app never crashes offline
@@ -60,6 +61,7 @@ grab the `.pkg` from the workflow artifacts.
 | X (cross) | Pause / resume the selected transfer |
 | O (circle) | Stop the selected transfer |
 | [ ] (square) | Re-transfer (re-run a completed/failed/stopped transfer) |
+| ▲ (triangle) | Expand full pkg details (icon, version, title id, source URL) |
 | OPTIONS | Exit |
 
 ### Quick start (from a PC)
