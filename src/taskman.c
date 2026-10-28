@@ -394,7 +394,9 @@ bool taskman_set_state(int id, task_state_t state, int error)
 bool taskman_set_registered(int id, int bgft_task_id, const char* content_id,
                             const char* title, uint64_t package_size,
                             bool is_patch, bool has_icon,
-                            const char* manifest_path, const char* icon_path)
+                            const char* manifest_path, const char* icon_path,
+                            const char* app_ver, const char* content_type,
+                            uint32_t piece_count)
 {
     struct taskman_slot* slot;
     bool ok = false;
@@ -411,6 +413,14 @@ bool taskman_set_registered(int id, int bgft_task_id, const char* content_id,
         if (title) {
             snprintf(slot->info.title, sizeof(slot->info.title), "%s", title);
         }
+        if (app_ver) {
+            snprintf(slot->info.app_ver, sizeof(slot->info.app_ver), "%s", app_ver);
+        }
+        if (content_type) {
+            snprintf(slot->info.content_type, sizeof(slot->info.content_type),
+                     "%s", content_type);
+        }
+        slot->info.piece_count = piece_count;
         slot->info.package_size = package_size;
         slot->info.is_patch = is_patch;
         slot->info.has_icon = has_icon;

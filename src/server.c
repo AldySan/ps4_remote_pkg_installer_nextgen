@@ -675,12 +675,16 @@ static void v2_task_json(const task_info_t* t, char* out, size_t outsz)
     snprintf(out, outsz,
              "{\"id\":%d,\"bgft_task_id\":%d,\"state\":\"%s\","
              "\"title\":\"%s\",\"content_id\":\"%s\","
+             "\"app_ver\":\"%s\",\"content_type\":\"%s\",\"pieces\":%u,"
              "\"package_size\":%llu,"
              "\"transferred\":%llu,\"length_total\":%llu,"
              "\"percent\":%d,\"speed_bps\":%.0f,"
              "\"is_patch\":%s,\"error\":%d,"
              "\"rest_sec\":%u,\"num_index\":%u,\"num_total\":%u}",
              t->id, t->bgft_task_id, state, title_esc, t->content_id,
+             t->app_ver[0] ? t->app_ver : "",
+             t->content_type[0] ? t->content_type : "",
+             t->piece_count,
              (unsigned long long)t->package_size,
              (unsigned long long)t->transferred_total,
              (unsigned long long)t->length_total,
