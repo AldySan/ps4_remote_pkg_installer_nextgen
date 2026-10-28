@@ -1030,6 +1030,20 @@ static void route(OrbisNetId fd, const char* method, const char* path,
             handle_v2_install(fd, body, body_len);
             return;
         }
+        if (util_starts_with(path, "/api/v2/jobs/")) {
+            const char* rest = path + 13;
+            int id = atoi(rest);
+            const char* slash = strchr(rest, '/');
+            if (slash) {
+                /* POST /api/v2/jobs/<id>/pause|resume|stop (documented form).
+                 * GET on the same path stays routed above for compatibility
+                 * with clients written against <= 0.0.2. */
+                handle_v2_job_op(fd, id, slash + 1);
+            } else {
+                resp_error(fd, 404, "Not found", "Page not found");
+            }
+            return;
+        }
         resp_error(fd, 404, "Not found", "Page not found");
         return;
     }
