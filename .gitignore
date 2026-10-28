@@ -1,0 +1,22 @@
+## OpenOrbis toolchain build artifacts
+build/
+obj/
+*.o
+*.elf
+*.oelf
+eboot.bin
+*.pkg
+pkg.gp4
+sce_sys/param.sfo
+sce_sys/about/
+
+## Native build noise
+*.d
+*.swp
+*~
+.DS_Store
+
+## Python (tools)
+__pycache__/
+*.pyc
+thirdparty/stubs/*.so

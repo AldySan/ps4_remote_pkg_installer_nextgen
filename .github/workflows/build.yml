@@ -1,0 +1,63 @@
+name: build
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "**.txt"
+  pull_request:
+    branches:
+      - dev
+    paths-ignore:
+      - "**.md"
+      - "**.txt"
+  workflow_dispatch:
+
+env:
+  OO_PS4_TOOLCHAIN: ${{ github.workspace }}/OpenOrbis/PS4Toolchain
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+  TOOLCHAIN_URL: https://github.com/illusion0001/OpenOrbis-PS4-Toolchain/releases/download/0.0.1.416/toolchain.tar.gz
+
+jobs:
+  build:
+    name: Build PS4 package
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld python3
+
+      - name: Host unit tests (portable core)
+        run: make test
+
+      - name: Cache OpenOrbis toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OO_PS4_TOOLCHAIN }}
+          key: oosdk-toolchain-0.0.1.416-linux
+
+      - name: Download OpenOrbis toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p OpenOrbis
+          curl -sL "$TOOLCHAIN_URL" | tar xz -C ./
+
+      - name: Build
+        run: make
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpi-nextgen-${{ github.sha }}
+          path: |
+            *.pkg
+            eboot.bin
+          if-no-files-found: error
