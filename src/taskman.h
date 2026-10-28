@@ -29,7 +29,7 @@ typedef enum task_state {
 } task_state_t;
 
 #define TASK_TITLE_MAX   256
-#define TASK_URL_MAX     512
+#define TASK_URL_MAX     2048  /* long signed URLs (S3/Azure) must fit */
 #define TASK_CONTENT_ID_MAX 40
 #define TASK_APP_VER_MAX 16
 #define TASK_CONTENT_TYPE_MAX 8
