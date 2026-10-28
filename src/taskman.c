@@ -111,12 +111,16 @@ static void poll_task(struct taskman_slot* slot)
     }
 
     if (!bgft_get_progress(t->bgft_task_id, &progress, &error)) {
-        if (slot->last_progress_ok && t->state == TASK_STATE_RUNNING) {
-            /* Task finished and was unregistered by BGFT. */
+        if (slot->last_progress_ok &&
+            (t->state == TASK_STATE_RUNNING || t->state == TASK_STATE_REGISTERED ||
+             t->state == TASK_STATE_PAUSED)) {
+            /* Task finished and was unregistered by BGFT (this also covers
+             * tasks removed from the queue while paused or still queued:
+             * otherwise their slots would never reach a terminal state). */
             if (t->length_total > 0 && t->transferred_total >= t->length_total) {
                 t->state = TASK_STATE_COMPLETED;
                 task_cleanup_files(t);
-            } else if (t->state != TASK_STATE_STOPPED) {
+            } else {
                 t->state = TASK_STATE_STOPPED;
                 task_cleanup_files(t);
             }
@@ -155,7 +159,11 @@ static void poll_task(struct taskman_slot* slot)
         return;
     }
 
-    if (t->state == TASK_STATE_REGISTERED || t->state == TASK_STATE_PAUSED) {
+    /* A queued (REGISTERED) task becomes RUNNING once BGFT starts moving
+     * bytes. PAUSED is deliberately left alone: it only returns to RUNNING
+     * via an explicit resume (a paused task has transferred_total > 0, so
+     * promoting it here would undo every pause within one poll). */
+    if (t->state == TASK_STATE_REGISTERED) {
         if (t->transferred_total > 0 || t->preparing_percent >= 100) {
             t->state = TASK_STATE_RUNNING;
         }
