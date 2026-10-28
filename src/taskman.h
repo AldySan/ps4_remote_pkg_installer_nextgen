@@ -87,7 +87,9 @@ bool taskman_set_registered(int id, int bgft_task_id, const char* content_id,
                             bool is_patch, bool has_icon,
                             const char* manifest_path, const char* icon_path);
 
-/* Terminal-state event hook (invoked outside the registry lock). */
+/* Terminal-state event hook. NOTE: invoked with the registry lock held
+ * (and possibly other locks on top); callbacks must not call back into
+ * taskman and must only use lock-safe operations. */
 typedef void (*taskman_event_t)(int job_id, task_state_t state, void* arg);
 void taskman_on_event(taskman_event_t cb, void* arg);
 

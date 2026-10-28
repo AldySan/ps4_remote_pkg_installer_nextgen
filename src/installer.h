@@ -17,6 +17,7 @@
 typedef struct install_result {
     int job_id;          /* taskman job id (v2 API) */
     int task_id;         /* BGFT task id, -1 = already installed */
+    int bgft_error;      /* BGFT registration error code (0 = none/transport) */
     char title[256];
     char content_id[40];
     uint64_t package_size;
