@@ -216,15 +216,16 @@ static SDL_Texture* icon_texture(const task_info_t* t, int* out_w, int* out_h)
             slot = s;
             break;
         }
-        if (!s->tried && !s->tex) {
-            slot = s; /* free slot, keep looking for an exact match */
-        }
         if (s->last_used < victim->last_used) {
             victim = s;
         }
     }
     if (!slot) {
-        slot = victim; /* evict least recently used */
+        /* Take the least recently used slot and re-key it for this job.
+         * Never-used slots (last_used == 0) win over any used one, so a
+         * fresh cache fills slot by slot; the re-key below is mandatory:
+         * the victim still carries a previous (or zero-initialized) key. */
+        slot = victim;
         if (slot->tex) {
             SDL_DestroyTexture(slot->tex);
         }
