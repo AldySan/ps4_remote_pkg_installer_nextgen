@@ -860,7 +860,7 @@ static void handle_v2_install(OrbisNetId fd, const char* body, size_t body_len)
 {
     cJSON* root = parse_body(body, body_len);
     install_result_t result;
-    char err[256];
+    char err[256] = "";
     char resp[900];
 
     if (!root) {
