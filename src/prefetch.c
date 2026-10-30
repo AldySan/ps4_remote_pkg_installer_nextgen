@@ -95,7 +95,8 @@ static void* worker_thread(void* arg)
         size_t c = (size_t)-1;
         uint64_t off;
         size_t want;
-        http_result_t r;
+        http_result_t r = { 0 }; /* read in the failure log even when the
+                                  * session could not be opened (r unfilled) */
         bool aborting;
 
         /* Claim the next pending chunk inside the ring window. */
@@ -237,7 +238,12 @@ prefetch_t* prefetch_start(const char* url, uint64_t total_size, int connections
     pf->connections = connections;
     pf->ring_size = PREFETCH_RING_SIZE;
     if (pf->ring_size > (size_t)total_size) {
-        pf->ring_size = (size_t)((total_size + 0xFFFFFULL) & ~0xFFFFFULL);
+        /* Round up to a whole number of chunks so the worker window
+         * (ring_size / PREFETCH_CHUNK_SIZE chunks) is never empty: a ring
+         * smaller than one chunk left nothing claimable and hung both the
+         * workers and the reader on pieces < 2 MiB. */
+        pf->ring_size = (size_t)((total_size + PREFETCH_CHUNK_SIZE - 1) &
+                                 ~(uint64_t)(PREFETCH_CHUNK_SIZE - 1));
     }
 
     pf->ring = (uint8_t*)malloc(pf->ring_size);
