@@ -218,6 +218,10 @@ int main(void)
     return 0;
 
 err_window_destroy:
+    /* Reached with or without a renderer (SDL_DestroyRenderer tolerates
+     * NULL); both window and renderer must go before SDL_Quit. */
+    SDL_DestroyRenderer(s_renderer);
+    s_renderer = NULL;
     SDL_DestroyWindow(s_window);
     s_window = NULL;
 
