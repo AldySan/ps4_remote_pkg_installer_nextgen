@@ -57,7 +57,9 @@ struct server_sockaddr_in {
 
 static pthread_t s_thread;
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t s_stop_cv = PTHREAD_COND_INITIALIZER;
 static volatile bool s_running = false;
+static volatile bool s_stopping = false;   /* stop unwinding: start waits */
 static volatile OrbisNetId s_listen_fd = -1;
 static int s_port = 0;
 static int s_active_conns = 0;
@@ -1258,24 +1260,36 @@ bool server_start(int port)
 {
     struct server_sockaddr_in addr;
     int reuse = 1;
+    OrbisNetId fd;
     int ret;
+    bool ok = false;
 
+    /* start/stop are serialized: server_stop() runs from BOTH the netmon
+     * callback and main; an unsynchronized check-then-act could double
+     * pthread_join (UB) or bind while the old listener is unwinding. */
+    pthread_mutex_lock(&s_lock);
+    while (s_stopping) {
+        /* Wait for a stop in progress instead of binding over it. */
+        pthread_cond_wait(&s_stop_cv, &s_lock);
+    }
     if (s_running) {
+        pthread_mutex_unlock(&s_lock);
         return true;
     }
     if (netmon_mem_id() < 0) {
         LOG_WARN("server: network stack not ready");
+        pthread_mutex_unlock(&s_lock);
         return false;
     }
 
-    s_listen_fd = sceNetSocket(APP_SHORT_NAME "_http",
-                               ORBIS_NET_AF_INET, ORBIS_NET_SOCK_STREAM, 0);
-    if (s_listen_fd < 0) {
-        LOG_ERROR("sceNetSocket failed: %d", (int)s_listen_fd);
-        return false;
+    fd = sceNetSocket(APP_SHORT_NAME "_http",
+                      ORBIS_NET_AF_INET, ORBIS_NET_SOCK_STREAM, 0);
+    if (fd < 0) {
+        LOG_ERROR("sceNetSocket failed: %d", (int)fd);
+        goto out;
     }
 
-    sceNetSetsockopt(s_listen_fd, SERVER_SOL_SOCKET, SERVER_SO_REUSEADDR,
+    sceNetSetsockopt(fd, SERVER_SOL_SOCKET, SERVER_SO_REUSEADDR,
                      &reuse, sizeof(reuse));
 
     memset(&addr, 0, sizeof(addr));
@@ -1284,50 +1298,60 @@ bool server_start(int port)
     addr.sin_port = sceNetHtons((uint16_t)port);
     addr.sin_addr = 0; /* INADDR_ANY */
 
-    ret = sceNetBind(s_listen_fd, (OrbisNetSockaddr*)&addr, sizeof(addr));
+    ret = sceNetBind(fd, (OrbisNetSockaddr*)&addr, sizeof(addr));
     if (ret != 0) {
         LOG_ERROR("sceNetBind(%d) failed: %d", port, ret);
-        sceNetSocketClose(s_listen_fd);
-        s_listen_fd = -1;
-        return false;
+        sceNetSocketClose(fd);
+        goto out;
     }
 
-    ret = sceNetListen(s_listen_fd, SERVER_BACKLOG);
+    ret = sceNetListen(fd, SERVER_BACKLOG);
     if (ret != 0) {
         LOG_ERROR("sceNetListen failed: %d", ret);
-        sceNetSocketClose(s_listen_fd);
-        s_listen_fd = -1;
-        return false;
+        sceNetSocketClose(fd);
+        goto out;
     }
-
-    s_port = port;
-    s_running = true;
 
     if (pthread_create(&s_thread, NULL, accept_thread, NULL) != 0) {
-        s_running = false;
-        sceNetSocketClose(s_listen_fd);
-        s_listen_fd = -1;
         LOG_ERROR("server: pthread_create failed");
-        return false;
+        sceNetSocketClose(fd);
+        goto out;
     }
 
+    s_listen_fd = fd;
+    s_port = port;
+    s_running = true;
+    ok = true;
     LOG_INFO("server listening on 0.0.0.0:%d", port);
-    return true;
+
+out:
+    pthread_mutex_unlock(&s_lock);
+    return ok;
 }
 
 void server_stop(void)
 {
+    OrbisNetId fd;
+    pthread_t thread;
+
+    pthread_mutex_lock(&s_lock);
     if (!s_running) {
+        /* Idempotent: another stop (or a stopped server) has nothing to do. */
+        pthread_mutex_unlock(&s_lock);
         return;
     }
     s_running = false;
+    s_stopping = true;
+    fd = s_listen_fd;        /* local copies: nothing may touch the globals */
+    s_listen_fd = -1;        /* while we unwind (start waits on s_stop_cv) */
+    thread = s_thread;
+    pthread_mutex_unlock(&s_lock);
 
-    if (s_listen_fd >= 0) {
-        sceNetSocketAbort(s_listen_fd, 0);
-        sceNetSocketClose(s_listen_fd);
-        s_listen_fd = -1;
+    if (fd >= 0) {
+        sceNetSocketAbort(fd, 0);
+        sceNetSocketClose(fd);
     }
-    pthread_join(s_thread, NULL);
+    pthread_join(thread, NULL);
 
     /* Wait briefly (bounded) for in-flight connection threads. They are
      * detached, so stragglers (e.g. a send stuck on a dead link) finish on
@@ -1346,6 +1370,11 @@ void server_stop(void)
             usleep(50 * 1000);
         }
     }
+
+    pthread_mutex_lock(&s_lock);
+    s_stopping = false;
+    pthread_cond_broadcast(&s_stop_cv);
+    pthread_mutex_unlock(&s_lock);
     s_port = 0;
     LOG_INFO("server stopped");
 }
