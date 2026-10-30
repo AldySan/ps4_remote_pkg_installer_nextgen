@@ -409,6 +409,11 @@ bool installer_install_direct(const char* const* urls, size_t url_count,
     size_t i;
 
     if (!urls || url_count == 0 || !out || !err || errsz == 0) {
+        /* Every failure path must leave a message in err: callers print
+         * it (or read err[0]) without initializing the buffer first. */
+        if (err && errsz > 0) {
+            snprintf(err, errsz, "empty package url list");
+        }
         return false;
     }
     for (i = 0; i < url_count; ++i) {
@@ -439,6 +444,9 @@ bool installer_install_ref_pkg_url(const char* url, install_result_t* out,
     size_t i;
 
     if (!url || !out || !err || errsz == 0) {
+        if (err && errsz > 0) {
+            snprintf(err, errsz, "invalid arguments");
+        }
         return false;
     }
     err[0] = '\0';
