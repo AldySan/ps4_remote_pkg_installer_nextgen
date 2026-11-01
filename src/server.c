@@ -1312,15 +1312,24 @@ bool server_start(int port)
         goto out;
     }
 
+    /* Publish the listener state BEFORE spawning the accept thread:
+     * pthread_create is the happens-before edge for the new thread, so it
+     * is guaranteed to observe a valid fd and s_running == true. Spawning
+     * first left a window where the thread read s_running == false and
+     * exited immediately, leaving the server "running" but dead. */
+    s_listen_fd = fd;
+    s_port = port;
+    s_running = true;
+
     if (pthread_create(&s_thread, NULL, accept_thread, NULL) != 0) {
         LOG_ERROR("server: pthread_create failed");
+        s_running = false;
+        s_listen_fd = -1;
+        s_port = 0;
         sceNetSocketClose(fd);
         goto out;
     }
 
-    s_listen_fd = fd;
-    s_port = port;
-    s_running = true;
     ok = true;
     LOG_INFO("server listening on 0.0.0.0:%d", port);
 
