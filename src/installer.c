@@ -408,6 +408,11 @@ bool installer_install_direct(const char* const* urls, size_t url_count,
 {
     size_t i;
 
+    /* Zero the result up front: callers read bgft_error/job_id after a
+     * false return, including the early validation failures below. */
+    if (out) {
+        memset(out, 0, sizeof(*out));
+    }
     if (!urls || url_count == 0 || !out || !err || errsz == 0) {
         /* Every failure path must leave a message in err: callers print
          * it (or read err[0]) without initializing the buffer first. */
@@ -443,6 +448,10 @@ bool installer_install_ref_pkg_url(const char* url, install_result_t* out,
     bool status = false;
     size_t i;
 
+    /* See installer_install_direct: deterministic result on every path. */
+    if (out) {
+        memset(out, 0, sizeof(*out));
+    }
     if (!url || !out || !err || errsz == 0) {
         if (err && errsz > 0) {
             snprintf(err, errsz, "invalid arguments");
