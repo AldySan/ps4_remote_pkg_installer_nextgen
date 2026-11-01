@@ -246,16 +246,19 @@ prefetch_t* prefetch_start(const char* url, uint64_t total_size, int connections
                                  ~(uint64_t)(PREFETCH_CHUNK_SIZE - 1));
     }
 
+    /* Init the sync primitives BEFORE any allocation that can fail: the
+     * err path below locks/broadcasts/joins through them, so they must
+     * be valid on every path that reaches it. */
+    pthread_mutex_init(&pf->lock, NULL);
+    pthread_cond_init(&pf->data_avail, NULL);
+    pthread_cond_init(&pf->work_avail, NULL);
+
     pf->ring = (uint8_t*)malloc(pf->ring_size);
     pf->chunk_count = (size_t)((total_size + PREFETCH_CHUNK_SIZE - 1) / PREFETCH_CHUNK_SIZE);
     pf->chunk_state = (uint8_t*)calloc(pf->chunk_count, 1);
     if (!pf->ring || !pf->chunk_state) {
         goto err;
     }
-
-    pthread_mutex_init(&pf->lock, NULL);
-    pthread_cond_init(&pf->data_avail, NULL);
-    pthread_cond_init(&pf->work_avail, NULL);
 
     {
         int i;
