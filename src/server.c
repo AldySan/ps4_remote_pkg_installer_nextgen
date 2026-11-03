@@ -1231,6 +1231,20 @@ static void* accept_thread(void* arg)
             continue;
         }
 
+        /* Bound how long a client may stall the request read. Without a
+         * receive timeout a half-open connection (peer vanished without a
+         * TCP RST: power loss, dropped wifi) parks its worker in
+         * sceNetRecv forever, and enough of them exhaust SERVER_MAX_CONNS
+         * until every new client is answered 503. Real clients send the
+         * whole request right after connecting, so 30s per recv is ample. */
+        {
+            struct timeval recv_to;
+            recv_to.tv_sec = 30;
+            recv_to.tv_usec = 0;
+            sceNetSetsockopt(fd, SERVER_SOL_SOCKET, SERVER_SO_RCVTIMEO,
+                             &recv_to, sizeof(recv_to));
+        }
+
         pthread_mutex_lock(&s_lock);
         if (s_active_conns < SERVER_MAX_CONNS) {
             ++s_active_conns;
