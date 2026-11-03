@@ -196,19 +196,24 @@ int main(void)
 
     LOG_INFO("shutting down");
 
-    if (s_controller) {
-        SDL_GameControllerClose(s_controller);
-    }
-    SDL_DestroyRenderer(s_renderer);
-    SDL_DestroyWindow(s_window);
-    SDL_Quit();
-
+    /* Stop services first. ui_fini() destroys the icon textures and the
+     * font atlas, which must happen while their renderer still exists:
+     * SDL_DestroyRenderer frees every texture it created, and SDL_Quit()
+     * tears the subsystem down entirely — freeing them afterwards (as the
+     * old order did) is a use-after-free at exit. */
     server_stop();
     ui_fini();
     taskman_stop();
     bgft_fini();
     appinst_fini();
     netmon_stop();
+
+    if (s_controller) {
+        SDL_GameControllerClose(s_controller);
+    }
+    SDL_DestroyRenderer(s_renderer);
+    SDL_DestroyWindow(s_window);
+    SDL_Quit();
 
     sceUserServiceTerminate();
     modules_unload();
