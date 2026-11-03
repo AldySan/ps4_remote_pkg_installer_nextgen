@@ -145,6 +145,13 @@ void font_fit(char* text, size_t textsz, int max_px, int scale)
         return;
     }
     max_chars = (size_t)(max_px / font_advance(scale));
+    /* max_px is derived from layout arithmetic, not from the buffer size:
+     * clamp it so the ".." overwrite below can never run past text. (A
+     * max_chars > textsz would also underflow the snprintf size and
+     * write out of bounds; negative max_px lands here as a huge value.) */
+    if (max_chars > textsz - 1) {
+        max_chars = textsz - 1;
+    }
     len = strlen(text);
     if (len <= max_chars) {
         return;
