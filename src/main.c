@@ -139,6 +139,17 @@ int main(void)
 
     s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!s_renderer) {
+        /*
+         * The PS4 SDL2 port ships only the software renderer: the sole
+         * registered driver does not advertise SDL_RENDERER_ACCELERATED,
+         * so the request above can never be satisfied there and used to
+         * abort startup before a single frame was drawn (issue #42).
+         * Fall back to the default driver; the software path presents
+         * through the window surface on its own.
+         */
+        s_renderer = SDL_CreateRenderer(s_window, -1, 0);
+    }
+    if (!s_renderer) {
         LOG_ERROR("SDL_CreateRenderer failed: %s", SDL_GetError());
         goto err_window_destroy;
     }
