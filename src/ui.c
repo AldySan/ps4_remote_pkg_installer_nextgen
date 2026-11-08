@@ -167,7 +167,21 @@ struct ui_jobs {
     int count;
 };
 
+/* Shared render-thread snapshot. A 32-entry snapshot is ~85 KB: keeping
+ * it on the stack made every draw/action frame carry that much, and the
+ * main thread stack size on PS4 is an undocumented kernel default (the
+ * OpenOrbis crt leaves the proc param stack slot unset). All callers
+ * run on the render thread, so one reusable buffer is safe. */
+static struct ui_jobs s_jobs;
+
 static bool ui_collect_cb(const task_info_t* t, void* arg);
+static void ui_collect(struct ui_jobs* jobs);
+
+static struct ui_jobs* ui_snapshot(void)
+{
+    ui_collect(&s_jobs);
+    return &s_jobs;
+}
 
 static void ui_collect(struct ui_jobs* jobs)
 {
@@ -540,7 +554,7 @@ static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected
 
 static void draw_jobs(SDL_Renderer* r)
 {
-    struct ui_jobs jobs;
+    struct ui_jobs* const jobs = ui_snapshot();
     int y = UI_HEADER_H + UI_STATUS_H + 20;
     int log_h = UI_LOG_LINES * (font_height(UI_SCALE_SM) + 6) + 34;
     int area_bottom = UI_H - UI_FOOTER_H - log_h - 12 - 20;
@@ -552,10 +566,8 @@ static void draw_jobs(SDL_Renderer* r)
         visible = 1;
     }
 
-    ui_collect(&jobs);
-
-    if (s_selected >= jobs.count) {
-        s_selected = jobs.count > 0 ? jobs.count - 1 : 0;
+    if (s_selected >= jobs->count) {
+        s_selected = jobs->count > 0 ? jobs->count - 1 : 0;
     }
     if (s_selected < s_scroll) {
         s_scroll = s_selected;
@@ -564,7 +576,7 @@ static void draw_jobs(SDL_Renderer* r)
         s_scroll = s_selected - visible + 1;
     }
 
-    if (jobs.count == 0) {
+    if (jobs->count == 0) {
         int line_h = font_height(UI_SCALE) + 18;
         font_draw(r, 48, y + 12, UI_SCALE, TXT_DIM, "No transfers yet.");
         font_draw(r, 48, y + 12 + line_h, UI_SCALE, TXT_DIM,
@@ -577,17 +589,17 @@ static void draw_jobs(SDL_Renderer* r)
         return;
     }
 
-    for (i = s_scroll; i < jobs.count && i < s_scroll + visible; ++i) {
-        int h = draw_card(r, &jobs.items[i], y, i == s_selected,
+    for (i = s_scroll; i < jobs->count && i < s_scroll + visible; ++i) {
+        int h = draw_card(r, &jobs->items[i], y, i == s_selected,
                           i == s_selected && s_details);
         y += h + UI_CARD_GAP + 16;
     }
 
-    if (jobs.count > visible) {
+    if (jobs->count > visible) {
         char nav[64];
-        int shown = (s_scroll + visible < jobs.count) ? s_scroll + visible
-                                                      : jobs.count;
-        snprintf(nav, sizeof(nav), "%d-%d of %d", s_scroll + 1, shown, jobs.count);
+        int shown = (s_scroll + visible < jobs->count) ? s_scroll + visible
+                                                        : jobs->count;
+        snprintf(nav, sizeof(nav), "%d-%d of %d", s_scroll + 1, shown, jobs->count);
         font_draw(r, UI_W - 48 - (int)strlen(nav) * font_advance(UI_SCALE_SM),
                   UI_H - UI_FOOTER_H - 26, UI_SCALE_SM, TXT_DIM, nav);
     }
@@ -664,9 +676,9 @@ static void* retry_thread(void* arg)
     return NULL;
 }
 
-static const task_info_t* selected_snapshot(struct ui_jobs* jobs)
+static const task_info_t* selected_snapshot(void)
 {
-    ui_collect(jobs);
+    const struct ui_jobs* jobs = ui_snapshot();
     if (s_selected >= jobs->count) {
         return NULL;
     }
@@ -675,8 +687,7 @@ static const task_info_t* selected_snapshot(struct ui_jobs* jobs)
 
 static void action_pause_resume(void)
 {
-    struct ui_jobs jobs;
-    const task_info_t* t = selected_snapshot(&jobs);
+    const task_info_t* t = selected_snapshot();
     int error = 0;
 
     if (!t) {
@@ -695,8 +706,7 @@ static void action_pause_resume(void)
 
 static void action_stop(void)
 {
-    struct ui_jobs jobs;
-    const task_info_t* t = selected_snapshot(&jobs);
+    const task_info_t* t = selected_snapshot();
     int error = 0;
 
     if (!t) {
@@ -712,8 +722,7 @@ static void action_stop(void)
 
 static void action_retry(void)
 {
-    struct ui_jobs jobs;
-    const task_info_t* t = selected_snapshot(&jobs);
+    const task_info_t* t = selected_snapshot();
     struct retry_ctx* ctx;
     pthread_t tid;
 
