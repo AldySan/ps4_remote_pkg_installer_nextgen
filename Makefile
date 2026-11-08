@@ -10,7 +10,7 @@
 
 # Package metadata.
 TITLE       := Remote PKG Installer NextGen
-VERSION     := 0.0.7
+VERSION     := 0.0.8
 TITLE_ID    := RPIN00001
 CONTENT_ID  := IV0000-RPIN00001_00-RPINEXTGEN000000
 
