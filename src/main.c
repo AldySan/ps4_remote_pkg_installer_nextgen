@@ -40,6 +40,16 @@ static SDL_GameController* s_controller = NULL;
 
 static bool s_running = true;
 
+/* The process may arrive with libSceUserService already initialized (the
+ * loader or the environment can set it up before main() runs). That is a
+ * healthy state to run in, not a failure: the PS4 SDL2 joystick driver
+ * faces the same situation and keeps going when it sees this code. */
+#define SCE_USER_SERVICE_ERROR_ALREADY_INITIALIZED ((int)0x80960003)
+
+/* True only when this app performed the user service initialization, so the
+ * shutdown path never terminates a service it does not own. */
+static bool s_user_service_owned = false;
+
 static void on_netmon_event(void* arg, bool up)
 {
     (void)arg;
@@ -121,10 +131,11 @@ int main(void)
     }
 
     ret = sceUserServiceInitialize(NULL);
-    if (ret != 0) {
+    if (ret != 0 && ret != SCE_USER_SERVICE_ERROR_ALREADY_INITIALIZED) {
         LOG_ERROR("sceUserServiceInitialize failed: 0x%08X", ret);
         goto err_modules_unload;
     }
+    s_user_service_owned = (ret == 0);
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
         LOG_ERROR("SDL_Init failed: %s", SDL_GetError());
@@ -226,7 +237,9 @@ int main(void)
     SDL_DestroyWindow(s_window);
     SDL_Quit();
 
-    sceUserServiceTerminate();
+    if (s_user_service_owned) {
+        sceUserServiceTerminate();
+    }
     modules_unload();
 
     dbglogger_stop();
@@ -245,7 +258,9 @@ err_sdl_quit:
     SDL_Quit();
 
 err_user_service_terminate:
-    sceUserServiceTerminate();
+    if (s_user_service_owned) {
+        sceUserServiceTerminate();
+    }
 
 err_modules_unload:
     modules_unload();
