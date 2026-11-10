@@ -29,9 +29,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-/* ------------------------------------------------------------------ */
-/* Platform socket bits missing from the toolchain headers.            */
-/* ------------------------------------------------------------------ */
+/* Platform socket bits missing from the toolchain headers. */
 
 #define SERVER_SOL_SOCKET  0xffff
 #define SERVER_SO_REUSEADDR 0x0004
@@ -45,9 +43,7 @@ struct server_sockaddr_in {
     uint8_t sin_zero[8];
 };
 
-/* ------------------------------------------------------------------ */
-/* Limits / state                                                      */
-/* ------------------------------------------------------------------ */
+/* Limits / state */
 
 #define SERVER_BACKLOG        8
 #define SERVER_MAX_CONNS      16
@@ -64,9 +60,7 @@ static volatile OrbisNetId s_listen_fd = -1;
 static int s_port = 0;
 static int s_active_conns = 0;
 
-/* ------------------------------------------------------------------ */
-/* Connection write helpers                                            */
-/* ------------------------------------------------------------------ */
+/* Connection write helpers */
 
 /* Sends a buffer; returns false when the connection is gone so callers
  * can stop pulling data for a dead client (e.g. a stopped download). */
@@ -89,9 +83,7 @@ static bool conn_send_str(OrbisNetId fd, const char* s)
     return conn_send(fd, s, strlen(s));
 }
 
-/* ------------------------------------------------------------------ */
-/* Response writers (legacy byte-compatible)                           */
-/* ------------------------------------------------------------------ */
+/* Response writers (legacy byte-compatible) */
 
 static void resp_headers_json(OrbisNetId fd)
 {
@@ -163,9 +155,7 @@ static void json_escape(const char* in, char* out, size_t outsz)
     out[o] = '\0';
 }
 
-/* ------------------------------------------------------------------ */
-/* /static/ file serving + accelerated piece proxy                     */
-/* ------------------------------------------------------------------ */
+/* /static/ file serving + accelerated piece proxy */
 
 static const char* static_content_type(const char* name)
 {
@@ -227,7 +217,7 @@ static void serve_static_file(OrbisNetId fd, const char* name)
     fclose(f);
 }
 
-/* GET /static/proxy/<job>/<piece> — streams a piece through the
+/* GET /static/proxy/<job>/<piece>: streams a piece through the
  * adaptive prefetch engine (transfer acceleration). */
 static void serve_proxy_piece(OrbisNetId fd, int job_id, size_t piece)
 {
@@ -292,9 +282,7 @@ static void handle_static(OrbisNetId fd, const char* path)
     serve_static_file(fd, name);
 }
 
-/* ------------------------------------------------------------------ */
-/* JSON body helpers                                                   */
-/* ------------------------------------------------------------------ */
+/* JSON body helpers */
 
 static cJSON* parse_body(const char* body, size_t body_len)
 {
@@ -326,9 +314,7 @@ static bool get_int(const cJSON* root, const char* key, int* out)
     return true;
 }
 
-/* ------------------------------------------------------------------ */
-/* Legacy API handlers                                                 */
-/* ------------------------------------------------------------------ */
+/* Legacy API handlers */
 
 static void handle_api_install(OrbisNetId fd, const char* body, size_t body_len)
 {
@@ -663,9 +649,7 @@ static void handle_api_find_task(OrbisNetId fd, const char* body, size_t body_le
     cJSON_Delete(root);
 }
 
-/* ------------------------------------------------------------------ */
-/* v2 API handlers                                                     */
-/* ------------------------------------------------------------------ */
+/* v2 API handlers */
 
 static void v2_task_json(const task_info_t* t, char* out, size_t outsz)
 {
@@ -928,9 +912,7 @@ static void handle_v2_install(OrbisNetId fd, const char* body, size_t body_len)
     cJSON_Delete(root);
 }
 
-/* ------------------------------------------------------------------ */
-/* Request routing                                                     */
-/* ------------------------------------------------------------------ */
+/* Request routing */
 
 static void route(OrbisNetId fd, const char* method, const char* path,
                   const char* body, size_t body_len)
@@ -1053,9 +1035,7 @@ static void route(OrbisNetId fd, const char* method, const char* path,
     resp_error(fd, 400, "Bad request", "Unsupported method");
 }
 
-/* ------------------------------------------------------------------ */
 /* HTTP request parsing (one request per connection, Connection: close) */
-/* ------------------------------------------------------------------ */
 
 struct http_request {
     char method[8];
@@ -1184,9 +1164,7 @@ static bool conn_read_request(OrbisNetId fd, struct http_request* req)
     return true;
 }
 
-/* ------------------------------------------------------------------ */
-/* Connection worker + accept loop                                     */
-/* ------------------------------------------------------------------ */
+/* Connection worker + accept loop */
 
 static void* conn_thread(void* arg)
 {

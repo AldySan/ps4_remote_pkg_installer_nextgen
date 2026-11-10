@@ -10,7 +10,7 @@
 
 # Package metadata.
 TITLE       := Remote PKG Installer NextGen
-VERSION     := 0.0.8
+VERSION     := 0.0.9
 TITLE_ID    := RPIN00001
 CONTENT_ID  := IV0000-RPIN00001_00-RPINEXTGEN000000
 
@@ -19,7 +19,8 @@ LIBS        := -lc -lkernel -lc++ \
                -lSceSysmodule -lSceSystemService -lSceUserService \
                -lSceNetCtl -lSceNet -lSceSsl -lSceHttp -lSceNpCommon \
                -lSceAppInstUtil -lSceBgft \
-               -lSceVideoOut -lSceAudioOut -lScePad -lSceFreeType -lSDL2
+               -lSceVideoOut -lSceAudioOut -lScePad -lSceFreeType \
+               -lSDL2 -lScePigletv2VSH
 
 # Additional compile flags.
 EXTRAFLAGS  := -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 -g \

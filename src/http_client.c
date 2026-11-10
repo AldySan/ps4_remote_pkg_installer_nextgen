@@ -467,7 +467,7 @@ bool http_client_get_session(http_session_t** psess, const char* url,
                          buf, bufsz, result, NULL, 0)) {
             return true;
         }
-        /* Transport failure — likely a stale keep-alive connection:
+        /* Transport failure (likely a stale keep-alive connection):
          * retry once with a fresh session. */
         http_session_close(*psess);
         *psess = http_session_open(url);

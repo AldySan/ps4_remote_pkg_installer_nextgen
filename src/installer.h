@@ -34,7 +34,7 @@ bool installer_install_direct(const char* const* urls, size_t url_count,
 
 /*
  * Installs from a reference package manifest (JSON with piece urls,
- * offsets and sizes — produced by tools such as PS4 PKG Linker).
+ * offsets and sizes, produced by tools such as PS4 PKG Linker).
  */
 bool installer_install_ref_pkg_url(const char* url, install_result_t* out,
                                    char* err, size_t errsz);

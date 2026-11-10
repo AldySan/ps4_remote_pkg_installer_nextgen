@@ -1,36 +1,63 @@
+<p align="center">
+  <img src="sce_sys/icon0.png" width="128" alt="Remote PKG Installer NextGen app icon">
+</p>
+
 # Remote PKG Installer NextGen
 
-A modern rewrite of flatz's [ps4_remote_pkg_installer](https://github.com/flatz/ps4_remote_pkg_installer)
-for jailbroken PS4 consoles, built with the
-[OpenOrbis PS4 Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain).
+[![Build](https://github.com/AldySan/ps4_remote_pkg_installer_nextgen/actions/workflows/build.yml/badge.svg)](https://github.com/AldySan/ps4_remote_pkg_installer_nextgen/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/AldySan/ps4_remote_pkg_installer_nextgen?label=release)](https://github.com/AldySan/ps4_remote_pkg_installer_nextgen/releases)
+[![Platform](https://img.shields.io/badge/platform-PS4-003791)](https://github.com/AldySan/ps4_remote_pkg_installer_nextgen)
+[![License](https://img.shields.io/github/license/AldySan/ps4_remote_pkg_installer_nextgen)](LICENSE)
 
-Install PKG packages remotely over your network from any device — no USB drives —
-with a live on-screen dashboard: active transfers with real-time speed and progress,
-pause/resume/stop/re-transfer controls per item, storage status, and an activity log.
+Remote PKG Installer NextGen installs PKG files on a jailbroken PS4 over
+your home network. Send an install from a PC, a phone, or any script, and
+watch it happen live on your TV. No USB drives, no copying files back and
+forth.
+
+It is a modern rewrite of flatz's
+[ps4_remote_pkg_installer](https://github.com/flatz/ps4_remote_pkg_installer),
+built with the [OpenOrbis PS4 Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain),
+and it keeps the original API intact, so tools that worked with the old
+app keep working here.
 
 ## Highlights
 
-- **Live dashboard UI** (dark tech theme) — no more static splash screen
-- **Full pkg info on every card** — icon, title, version, content id, type, size
-- **Per-item controls** — pause, resume, stop, and re-transfer each transfer
-- **Stability first** — works with or without a network connection; the server
-  starts automatically once a link is available, and the app never crashes offline
-- **Faster transfers** — adaptive multi-segment HTTP downloads for staged installs
-- **Legacy API compatible** — the original Web API is preserved 1:1, so existing
-  tools (remote_installer, web frontends, scripts) keep working
-- **New v2 API** — a cleaner REST interface with job management, progress, and logs
-- **Community friendly** — plain C11, one Makefile, CI builds every push
+- Live dashboard on your TV: every transfer with speed, progress, and ETA,
+  plus free storage space and the console's IP address
+- Full pkg info on every card: icon, title, version, content id, type, and
+  size
+- Per-item controls from the controller: pause, resume, stop, or
+  re-transfer any item
+- Works with or without a network: the app never crashes or exits when
+  there is no link, and the server starts on its own once one appears
+- Faster transfers: split pkg pieces are fetched through up to 4 parallel
+  connections when the source server allows it
+- Legacy API kept 1:1: existing frontends, tools, and scripts work without
+  changes
+- New v2 API: a cleaner REST interface with job management, progress, and
+  logs
 
 ## Requirements
 
-- PS4 with HEN (or any kernel payload providing fPKG support + `/data` mount),
-  same as the original application
-- A device on the same network to send commands (PC, phone, ...)
+- A PS4 with HEN active (or any kernel payload that provides fPKG support
+  and a `/data` mount), same as the original application
+- A device on the same network to send the install from: a PC, a phone,
+  anything that can make an HTTP request
 
-## Building
+## Installation
 
-Requires the [OpenOrbis PS4 Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain)
-(`OO_PS4_TOOLCHAIN` env var), `clang`, `lld`, and `python3`.
+### Option 1: download a release
+
+Go to the [releases page](https://github.com/AldySan/ps4_remote_pkg_installer_nextgen/releases)
+and grab the latest `RemotePkgInstallerNextGen-x.y.z.pkg`. Every release
+ships with a ready-to-install package built by CI.
+
+### Option 2: build from source
+
+You will need the
+[OpenOrbis PS4 Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain)
+(set the `OO_PS4_TOOLCHAIN` environment variable), plus `clang`, `lld`,
+and `python3`:
 
 ```sh
 export OO_PS4_TOOLCHAIN=/path/to/OpenOrbis/PS4Toolchain
@@ -39,30 +66,28 @@ make
 
 The final package is `IV0000-RPIN00001_00-RPINEXTGEN000000.pkg`.
 
-Every push and pull request is built by CI (see `.github/workflows/build.yml`);
-grab the `.pkg` from the workflow artifacts.
+Either way, install the resulting pkg on your PS4 with HEN active, using
+your usual package installer, and launch it from the home screen.
 
 ## Usage
 
-1. Install the package on your PS4 (HEN must be active).
-2. Launch it — the dashboard shows the console's IP, storage and transfers.
-3. Send installs from any device on the same network (see below). The
-   app works with or without a network link: the server starts
-   automatically once a link is available, and the app never exits on
-   its own.
-4. Transfers run through the system's BGFT download manager — they
-   continue even after the app closes.
-
-### On-screen controls
+1. Launch the app. The dashboard shows the console's IP address, free
+   storage, and your transfers.
+2. From any device on the same network, send an install. The pkg needs to
+   be reachable over HTTP, for example from a simple web server on your PC.
+3. Watch the progress on screen, or control transfers with the controller:
 
 | Button | Action |
 |---|---|
 | D-pad up/down | Select transfer |
 | X (cross) | Pause / resume the selected transfer |
 | O (circle) | Stop the selected transfer |
-| [ ] (square) | Re-transfer (re-run a completed/failed/stopped transfer) |
+| [ ] (square) | Re-transfer (re-run a completed, failed, or stopped transfer) |
 | ▲ (triangle) | Expand full pkg details (icon, version, title id, source URL) |
 | OPTIONS | Exit |
+
+Transfers run through the system's BGFT download manager, so they keep
+going even after you close the app.
 
 ### Quick start (from a PC)
 
@@ -83,52 +108,87 @@ curl 'http://<PS4-IP>:12800/api/v2/jobs/1/resume' -X POST
 curl 'http://<PS4-IP>:12800/api/v2/jobs/1/stop' -X POST
 ```
 
-The full API reference (legacy + v2) is documented in [docs/API.md](docs/API.md).
+The full API reference (legacy and v2) lives in
+[docs/API.md](docs/API.md).
 
-## Roadmap
+### Changing the port
 
-- [x] Project skeleton, build system, CI
-- [x] Core services (logging, network monitor, storage info, pkg/SFO parsing, HTTP client)
-- [x] Transfer engine (BGFT wrappers, task manager, adaptive multi-segment prefetch)
-- [x] HTTP server (legacy API 1:1, v2 API, /static/ + accelerated piece proxy)
-- [x] Live on-screen dashboard (status strip, transfer cards, activity log, controller controls)
-- [x] Docs & polish ([API reference](docs/API.md))
+The server listens on port **12800** by default. To use a different one,
+change `APP_DEFAULT_PORT` in [src/version.h](src/version.h) and rebuild.
 
 ## Development
 
-Host unit tests cover the portable core (util/SFO/pkg parsing) and run on
-every push:
+Host unit tests cover the portable core (util, SFO, and pkg parsing) and
+run on your machine, no PS4 needed:
 
 ```sh
 make test
 ```
 
-Fixtures in `tests/data/` are generated from a real build (`param.sfo` and
-the first 0x3000 bytes of a real package header).
+Fixtures in `tests/data/` are generated from a real build: `param.sfo`
+and the first 0x3000 bytes of a real package header.
 
-Regenerate the embedded bitmap font after changing the generator:
+The dashboard renders with a generated bitmap font and generated splash
+assets. Regenerate them with:
 
 ```sh
-python3 tools/gen_font.py   # requires Pillow
+python3 tools/gen_font.py    # embedded font (requires Pillow)
+python3 tools/gen_assets.py  # icon and splash screens (requires Pillow)
 ```
 
 Project layout:
 
 ```
-src/            application code (C11, no framework)
-thirdparty/     vendored cJSON + dbglogger (MIT), custom libSceBgft stub
-tools/          asset/font generators, host unit tests
-tests/data/     unit test fixtures
-docs/API.md     HTTP API reference (legacy + v2)
+src/               application code (C11, no framework)
+thirdparty/        vendored cJSON + dbglogger (MIT), custom libSceBgft stub
+tools/             asset/font generators, host unit tests
+tests/data/        unit test fixtures
+docs/API.md        HTTP API reference (legacy + v2)
+DESIGN.md          design direction and palette for the dashboard
 ```
+
+Every pull request into `dev` and every push to `main` is built by CI,
+and each release pkg is attached to its GitHub release automatically.
+
+## Technology
+
+- Plain C11 and one Makefile, no framework
+- SDL2 (OpenOrbis port) for the dashboard
+- [cJSON](https://github.com/DaveGamble/cJSON) and
+  [dbglogger](https://github.com/bucanero/dbglogger) as vendored libraries
+- Python with Pillow for the font and asset generators
+- GitHub Actions for CI and releases
+
+## Contributing
+
+Issues and pull requests are welcome. If you want to help with code,
+docs, or testing, [CONTRIBUTING.md](CONTRIBUTING.md) explains the setup
+and the workflow, and it is written with first-time contributors in mind.
+By participating, you agree to uphold our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Support development
+
+Remote PKG Installer NextGen is a free, open-source hobby project. If it
+made your life easier, here are a few ways to support it:
+
+- Give the repository a ⭐ Star on
+  [GitHub](https://github.com/AldySan/ps4_remote_pkg_installer_nextgen).
+  It helps other PS4 owners find the project.
+- Share it with friends or communities that still install pkgs the slow
+  way.
+- Support development on Ko-fi:
+  [ko-fi.com/aldysan](https://ko-fi.com/aldysan).
+
+Every star, share, and coffee is appreciated, but nothing is expected.
+The app is free and open source under GPL-3.0, and it stays that way.
 
 ## Credits
 
-- **flatz** — the original [Remote Package Installer](https://github.com/flatz/ps4_remote_pkg_installer)
-- **OpenOrbis Team** — the OpenOrbis PS4 Toolchain and SDL2 port
-- **DaveGamble** — [cJSON](https://github.com/DaveGamble/cJSON) (MIT)
-- **bucanero** — [dbglogger](https://github.com/bucanero/dbglogger) (MIT)
+- flatz: the original [Remote Package Installer](https://github.com/flatz/ps4_remote_pkg_installer)
+- OpenOrbis Team: the OpenOrbis PS4 Toolchain and the SDL2 port
+- DaveGamble: [cJSON](https://github.com/DaveGamble/cJSON) (MIT)
+- bucanero: [dbglogger](https://github.com/bucanero/dbglogger) (MIT)
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE).
+GPL-3.0, see [LICENSE](LICENSE).

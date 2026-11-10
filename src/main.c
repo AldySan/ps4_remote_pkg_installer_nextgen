@@ -16,6 +16,7 @@
 #include "log.h"
 #include "modules.h"
 #include "netmon.h"
+#include "pad.h"
 #include "proxy.h"
 #include "server.h"
 #include "storage.h"
@@ -23,7 +24,9 @@
 #include "ui.h"
 #include "util.h"
 
+#include <orbis/Pad.h>
 #include <orbis/Sysmodule.h>
+#include <orbis/_types/pad.h>
 #include <orbis/_types/sysmodule.h>
 #include <orbis/UserService.h>
 
@@ -31,14 +34,25 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
 
 size_t sceLibcHeapSize = 256 * 1024 * 1024;
 
 static SDL_Window* s_window = NULL;
 static SDL_Renderer* s_renderer = NULL;
-static SDL_GameController* s_controller = NULL;
+static bool s_ui_ok = false;   /* false = running headless (API only) */
 
 static bool s_running = true;
+
+/* The process may arrive with libSceUserService already initialized (the
+ * loader or the environment can set it up before main() runs). That is a
+ * healthy state to run in, not a failure: the established console input
+ * helpers treat this return code as benign and keep going. */
+#define SCE_USER_SERVICE_ERROR_ALREADY_INITIALIZED ((int)0x80960003)
+
+/* True only when this app performed the user service initialization, so the
+ * shutdown path never terminates a service it does not own. */
+static bool s_user_service_owned = false;
 
 static void on_netmon_event(void* arg, bool up)
 {
@@ -70,45 +84,56 @@ static void on_task_event(int job_id, task_state_t state, void* arg)
     }
 }
 
-static void handle_event(const SDL_Event* ev)
+/* Orbis pad buttons onto the button ids the dashboard consumes. */
+static const struct {
+    uint32_t orbis;
+    int sdl;
+} PAD_MAP[] = {
+    { ORBIS_PAD_BUTTON_UP,       SDL_CONTROLLER_BUTTON_DPAD_UP },
+    { ORBIS_PAD_BUTTON_DOWN,     SDL_CONTROLLER_BUTTON_DPAD_DOWN },
+    { ORBIS_PAD_BUTTON_LEFT,     SDL_CONTROLLER_BUTTON_DPAD_LEFT },
+    { ORBIS_PAD_BUTTON_RIGHT,    SDL_CONTROLLER_BUTTON_DPAD_RIGHT },
+    { ORBIS_PAD_BUTTON_CROSS,    SDL_CONTROLLER_BUTTON_A },
+    { ORBIS_PAD_BUTTON_CIRCLE,   SDL_CONTROLLER_BUTTON_B },
+    { ORBIS_PAD_BUTTON_SQUARE,   SDL_CONTROLLER_BUTTON_X },
+    { ORBIS_PAD_BUTTON_TRIANGLE, SDL_CONTROLLER_BUTTON_Y },
+};
+
+/*
+ * One frame of local input: the pad is polled directly (scePadReadState
+ * under pad_poll) instead of going through SDL's joystick subsystem, whose
+ * initialization reaches into the user service. Every subsystem SDL needs
+ * to start is one more thing that can fail on launch; the pad service is
+ * the single dependency left for local input.
+ */
+static void handle_pad_frame(void)
 {
-    if (ev->type == SDL_QUIT) {
-        s_running = false;
+    uint32_t pressed = pad_poll();
+    size_t i;
+
+    if (pressed & ORBIS_PAD_BUTTON_OPTIONS) {
+        s_running = false; /* OPTIONS exits */
         return;
     }
 
-    switch (ev->type) {
-        case SDL_CONTROLLERDEVICEADDED:
-            if (!s_controller) {
-                s_controller = SDL_GameControllerOpen(ev->cdevice.which);
-            }
-            break;
-        case SDL_CONTROLLERDEVICEREMOVED:
-            if (s_controller && ev->cdevice.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(s_controller))) {
-                SDL_GameControllerClose(s_controller);
-                s_controller = NULL;
-            }
-            break;
-        case SDL_CONTROLLERBUTTONDOWN:
-            if (ev->cbutton.button == SDL_CONTROLLER_BUTTON_START) {
-                s_running = false; /* OPTIONS exits */
-            } else {
-                ui_handle_button(ev->cbutton.button);
-            }
-            break;
-        default:
-            break;
+    for (i = 0; i < sizeof(PAD_MAP) / sizeof(PAD_MAP[0]); ++i) {
+        if (pressed & PAD_MAP[i].orbis) {
+            ui_handle_button(PAD_MAP[i].sdl);
+        }
     }
 }
 
 static void draw_frame(void)
 {
-    ui_frame(s_renderer);
+    if (s_ui_ok) {
+        ui_frame(s_renderer);
+    }
 }
 
 int main(void)
 {
     int ret;
+    int user_id = -1;
 
     /* Kernel log sink is always available; UDP sink activates when network is up. */
     dbglogger_init();
@@ -121,42 +146,77 @@ int main(void)
     }
 
     ret = sceUserServiceInitialize(NULL);
-    if (ret != 0) {
+    if (ret != 0 && ret != SCE_USER_SERVICE_ERROR_ALREADY_INITIALIZED) {
         LOG_ERROR("sceUserServiceInitialize failed: 0x%08X", ret);
         goto err_modules_unload;
     }
+    s_user_service_owned = (ret == 0);
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
-        LOG_ERROR("SDL_Init failed: %s", SDL_GetError());
-        goto err_user_service_terminate;
+    if (sceUserServiceGetInitialUser(&user_id) != 0) {
+        LOG_WARN("userService: no initial user; local input disabled");
+        user_id = -1;
     }
 
-    s_window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, 0);
-    if (!s_window) {
-        LOG_ERROR("SDL_CreateWindow failed: %s", SDL_GetError());
-        goto err_sdl_quit;
+    /*
+     * Local input is opened before the UI so a missing pad never stands
+     * between the user and the app. Failure is not fatal: control stays
+     * available through the web dashboard.
+     */
+    if (user_id >= 0 && !pad_init(user_id)) {
+        LOG_WARN("pad unavailable; control continues through the web dashboard");
     }
 
-    s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!s_renderer) {
+    if (SDL_Init(SDL_INIT_VIDEO) == 0) {
+        s_window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, 0);
+        if (s_window) {
+            s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+            if (!s_renderer) {
+                /*
+                 * The toolchain's SDL2 build registers exactly one driver:
+                 * a GLES2 renderer backed by Piglet (the console's OpenGL ES
+                 * module), so the request above selects the GPU and presents
+                 * with vsync. There is no CPU fallback tier in this build:
+                 * the software renderer is not registered and the fork's
+                 * video core implements no window framebuffer anyway, so the
+                 * retry below just re-asks GLES2 without flag requirements.
+                 * When that fails as well, the app degrades to headless
+                 * below and the web dashboard keeps serving installs.
+                 */
+                s_renderer = SDL_CreateRenderer(s_window, -1, 0);
+            }
+            if (s_renderer && ui_init(s_renderer)) {
+                s_ui_ok = true;
+            }
+        }
+    }
+
+    if (!s_ui_ok) {
         /*
-         * The PS4 SDL2 port ships only the software renderer: the sole
-         * registered driver does not advertise SDL_RENDERER_ACCELERATED,
-         * so the request above can never be satisfied there and used to
-         * abort startup before a single frame was drawn (issue #42).
-         * Fall back to the default driver; the software path presents
-         * through the window surface on its own.
+         * The dashboard is the local view of the app, not its life
+         * support. When any video-side step fails (SDL_Init, window,
+         * renderer, font atlas) the app degrades to running headless
+         * instead of aborting: the HTTP API and the web dashboard keep
+         * serving installs, and OPTIONS on the pad still exits. Tearing
+         * the partial video state down keeps the shutdown path simple.
          */
-        s_renderer = SDL_CreateRenderer(s_window, -1, 0);
-    }
-    if (!s_renderer) {
-        LOG_ERROR("SDL_CreateRenderer failed: %s", SDL_GetError());
-        goto err_window_destroy;
-    }
-
-    if (!ui_init(s_renderer)) {
-        LOG_ERROR("ui_init failed: %s", SDL_GetError());
-        goto err_window_destroy;
+        char reason[128];
+        snprintf(reason, sizeof(reason), "%s", SDL_GetError());
+        if (s_renderer) {
+            SDL_DestroyRenderer(s_renderer);
+            s_renderer = NULL;
+        }
+        if (s_window) {
+            SDL_DestroyWindow(s_window);
+            s_window = NULL;
+        }
+        if (SDL_WasInit(SDL_INIT_VIDEO)) {
+            SDL_Quit();
+        }
+        if (reason[0]) {
+            LOG_WARN("ui unavailable (%s); running headless, use the web dashboard", reason);
+        } else {
+            LOG_WARN("ui unavailable; running headless, use the web dashboard");
+        }
     }
 
     /*
@@ -195,14 +255,25 @@ int main(void)
         }
     }
 
-    LOG_INFO("dashboard running");
+    if (s_ui_ok) {
+        LOG_INFO("dashboard running");
+    } else {
+        LOG_INFO("running headless (web dashboard only)");
+    }
 
     while (s_running) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            handle_event(&ev);
+        handle_pad_frame();
+        if (s_ui_ok) {
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_QUIT) {
+                    s_running = false;
+                }
+            }
+            draw_frame();
+        } else {
+            usleep(100 * 1000); /* 10 Hz is plenty when nobody is watching */
         }
-        draw_frame();
     }
 
     LOG_INFO("shutting down");
@@ -210,42 +281,32 @@ int main(void)
     /* Stop services first. ui_fini() destroys the icon textures and the
      * font atlas, which must happen while their renderer still exists:
      * SDL_DestroyRenderer frees every texture it created, and SDL_Quit()
-     * tears the subsystem down entirely — freeing them afterwards (as the
+     * tears the subsystem down entirely: freeing them afterwards (as the
      * old order did) is a use-after-free at exit. */
     server_stop();
-    ui_fini();
+    if (s_ui_ok) {
+        ui_fini();
+    }
     taskman_stop();
     bgft_fini();
     appinst_fini();
     netmon_stop();
 
-    if (s_controller) {
-        SDL_GameControllerClose(s_controller);
+    if (s_ui_ok) {
+        SDL_DestroyRenderer(s_renderer);
+        SDL_DestroyWindow(s_window);
+        SDL_Quit();
     }
-    SDL_DestroyRenderer(s_renderer);
-    SDL_DestroyWindow(s_window);
-    SDL_Quit();
+    pad_fini();
 
-    sceUserServiceTerminate();
+    if (s_user_service_owned) {
+        sceUserServiceTerminate();
+    }
     modules_unload();
 
     dbglogger_stop();
 
     return 0;
-
-err_window_destroy:
-    /* Reached with or without a renderer (SDL_DestroyRenderer tolerates
-     * NULL); both window and renderer must go before SDL_Quit. */
-    SDL_DestroyRenderer(s_renderer);
-    s_renderer = NULL;
-    SDL_DestroyWindow(s_window);
-    s_window = NULL;
-
-err_sdl_quit:
-    SDL_Quit();
-
-err_user_service_terminate:
-    sceUserServiceTerminate();
 
 err_modules_unload:
     modules_unload();

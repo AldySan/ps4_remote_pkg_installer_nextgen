@@ -91,7 +91,7 @@ static void task_cleanup_files(const task_info_t* t)
         unlink(t->manifest_path);
     }
     if (t->has_icon && t->icon_path[0]) {
-        /* icon_path is /user/data/... — strip the /user mount prefix. */
+        /* icon_path is /user/data/...; strip the /user mount prefix. */
         char local[64];
         if (util_starts_with(t->icon_path, "/user")) {
             snprintf(local, sizeof(local), "%s", t->icon_path + 5);
@@ -228,7 +228,7 @@ void taskman_stop(void)
     }
     s_running = false;
     pthread_join(s_thread, NULL);
-    /* NOTE: tmp manifests/icons of active tasks are intentionally kept —
+    /* NOTE: tmp manifests/icons of active tasks are intentionally kept:
      * BGFT keeps downloading after the app exits (same as the original). */
 }
 
