@@ -20,20 +20,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Palette: own neutrals on a PS4-adjacent blue-black, one teal accent,
+ * three status hues. All text/surface pairs pass WCAG AA (>= 4.5:1). */
+
 /* Panel colors (4 components, for rect fills). */
-#define COL_BG      0x0D, 0x11, 0x17, 0xFF
-#define COL_PANEL   0x16, 0x1B, 0x22, 0xFF
-#define COL_PANEL2  0x1C, 0x23, 0x2D, 0xFF
-#define COL_TRACK   0x22, 0x2A, 0x33, 0xFF
-#define COL_BORDER  0x30, 0x36, 0x3D, 0xFF
+#define COL_BG      0x0B, 0x12, 0x20, 0xFF   /* canvas, darkest surface */
+#define COL_PANEL   0x11, 0x1A, 0x2C, 0xFF   /* card surface */
+#define COL_PANEL2  0x16, 0x23, 0x3A, 0xFF   /* status strip, selected card */
+#define COL_TRACK   0x1B, 0x2C, 0x46, 0xFF   /* progress bar groove */
+#define COL_BORDER  0x2E, 0x41, 0x60, 0xFF   /* quiet blue boundary */
 
 /* Text colors (0xRRGGBB, single value for font_draw). */
-#define TXT_TEXT    0xE6EDF3u
-#define TXT_DIM     0x8B949Eu
-#define TXT_ACCENT  0x39D2C0u
-#define TXT_GREEN   0x3FB950u
-#define TXT_RED     0xF85149u
-#define TXT_YELLOW  0xD29922u
+#define TXT_TEXT    0xEAF0F8u   /* soft cool white */
+#define TXT_DIM     0x9AACC4u   /* blue-tinted gray, secondary */
+#define TXT_ACCENT  0x39D2C0u   /* teal, clear of the status hues */
+#define TXT_GREEN   0x3FB950u   /* completed */
+#define TXT_RED     0xF85149u   /* failed */
+#define TXT_YELLOW  0xD29922u   /* paused / waiting */
 
 #define UI_SCALE     2
 #define UI_SCALE_SM  1
@@ -805,7 +808,7 @@ void ui_frame(SDL_Renderer* r)
     ++s_frame_seq;
     s_icon_budget = 1; /* at most one icon decode per frame */
 
-    SDL_SetRenderDrawColor(r, 0x0D, 0x11, 0x17, 0xFF);
+    SDL_SetRenderDrawColor(r, 0x0B, 0x12, 0x20, 0xFF);
     SDL_RenderClear(r);
 
     draw_header(r);
