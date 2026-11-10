@@ -30,7 +30,7 @@ jobs:
       - name: Install toolchain dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang lld python3 cmake
+          sudo apt-get install -y -qq clang lld llvm python3 cmake
 
       - name: Host unit tests (portable core)
         run: make test
@@ -67,7 +67,11 @@ jobs:
         working-directory: SDL-PS4
         run: |
           mkdir -p orbis
-          cmake -S . -B orbis --toolchain cmake/openorbis.cmake -DCMAKE_BUILD_TYPE=Release
+          # HAVE_GCC_WERROR_DECLARATION_AFTER_STATEMENT: the fork predates the
+          # stricter clang diagnostics on declaration-after-statement; keep them
+          # as warnings so the build does not depend on the runner's clang version.
+          cmake -S . -B orbis --toolchain cmake/openorbis.cmake -DCMAKE_BUILD_TYPE=Release \
+            -DHAVE_GCC_WERROR_DECLARATION_AFTER_STATEMENT=FALSE
           cmake --build orbis -j "$(nproc)"
 
       - name: Install SDL-PS4 into toolchain
