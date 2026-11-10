@@ -384,7 +384,6 @@ static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected
     char title[256];
     char line[256];
     char size_str[48];
-    char trans_str[48];
     char speed_str[48];
     char eta_str[16];
     char ver_str[24];
@@ -436,12 +435,12 @@ static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected
              t->content_id[0] ? t->content_id : "-",
              t->is_patch ? "  [PATCH]" : "",
              ver_str, size_str, t->id);
-    font_fit(line, sizeof(line), w - (tx - x) - 360, UI_SCALE_SM);
+    font_fit(line, sizeof(line), w - (tx - x) - 480, UI_SCALE_SM);
     font_draw(r, tx, y + 60, UI_SCALE_SM, TXT_DIM, line);
 
     /* Progress bar. */
     bar_y = y + 92;
-    bar_w = w - (tx - x) - 320;
+    bar_w = w - (tx - x) - 460;
     fill_rect(r, tx, bar_y, bar_w, 18, COL_TRACK);
     if (t->percent > 0) {
         int fill_w = (bar_w * t->percent) / 100;
@@ -454,16 +453,13 @@ static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected
         }
     }
 
-    /* Stats. */
-    util_format_size(t->transferred_total, trans_str, sizeof(trans_str));
+    /* Stats: the live figures at full size for couch reading. */
     format_speed(t->speed_bps, speed_str, sizeof(speed_str));
     format_eta(t->rest_sec_total, eta_str, sizeof(eta_str));
-    font_drawf(r, tx + bar_w + 24, y + 60, UI_SCALE_SM, TXT_TEXT,
+    font_drawf(r, tx + bar_w + 24, y + 10, UI_SCALE, TXT_TEXT,
                "%d%%", t->percent);
-    font_drawf(r, tx + bar_w + 24, y + 90, UI_SCALE_SM, TXT_DIM,
-               "%s %s", speed_str, eta_str);
-    font_drawf(r, tx + bar_w + 24, y + 114, UI_SCALE_SM, TXT_DIM,
-               "%s of %s", trans_str, size_str);
+    font_draw(r, tx + bar_w + 24, y + 54, UI_SCALE, TXT_TEXT, speed_str);
+    font_draw(r, tx + bar_w + 24, y + 98, UI_SCALE, TXT_DIM, eta_str);
 
     if (selected) {
         font_draw(r, tx, y + UI_CARD_H - 6, UI_SCALE_SM, TXT_DIM,
