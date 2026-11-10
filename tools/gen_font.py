@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Remote PKG Installer NextGen — bitmap font generator.
+Remote PKG Installer NextGen bitmap font generator.
 
 Renders ASCII 32..126 into a packed 1-bit-per-pixel glyph table
 (cell 12x21, font size 15, monospace) and emits src/font_data.h.
@@ -69,7 +69,7 @@ def main():
     lines.append(" * Copyright (c) 2025-present AldySan and contributors.")
     lines.append(" * Licensed under the GNU General Public License v3.0. See LICENSE for details.")
     lines.append(" *")
-    lines.append(" * GENERATED FILE — bitmap font (ASCII 32..126, 12x21 cells, 1bpp).")
+    lines.append(" * GENERATED FILE: bitmap font (ASCII 32..126, 12x21 cells, 1bpp).")
     lines.append(" * Regenerate with: python3 tools/gen_font.py")
     lines.append(" */")
     lines.append("#pragma once")

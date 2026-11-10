@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Remote PKG Installer NextGen — asset generator (icon0/pic0/pic1).
+Remote PKG Installer NextGen asset generator (icon0/pic0/pic1).
 
 Generates the app icon (512x512) and splash screens (1920x1080) in the
 dark-tech theme. Requires Pillow. Committed outputs live in sce_sys/.

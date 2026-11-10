@@ -3,12 +3,12 @@
  * Copyright (c) 2025-present AldySan and contributors.
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  *
- * BGFT (Background Function Task) download API — app-facing declarations.
+ * BGFT (Background Function Task) download API: app-facing declarations.
  *
  * Struct layouts and prototypes follow the BGFT ABI as documented in
  * flatz's ps4_stub_lib_maker_v2 (include/bgft.h), which matches the
  * original "Remote Package Installer" build. Note: length/size fields are
- * `unsigned long` (64-bit on PS4) — do not narrow them to 32-bit types.
+ * `unsigned long` (64-bit on PS4); do not narrow them to 32-bit types.
  *
  * The toolchain's stock libSceBgft stub only exports the VSH-facing
  * sceBgftService* functions, so this project builds its own stub shared
@@ -149,9 +149,7 @@ int sceBgftServiceDownloadFindTaskByContentId(const char* contentId,
 }
 #endif
 
-/* ------------------------------------------------------------------ */
-/* NextGen wrappers around the ABI above (src/bgft.c).                   */
-/* ------------------------------------------------------------------ */
+/* NextGen wrappers around the ABI above (src/bgft.c). */
 
 bool bgft_init(void);
 void bgft_fini(void);
