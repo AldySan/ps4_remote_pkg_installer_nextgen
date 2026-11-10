@@ -4,22 +4,23 @@ A modern rewrite of flatz's [ps4_remote_pkg_installer](https://github.com/flatz/
 for jailbroken PS4 consoles, built with the
 [OpenOrbis PS4 Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain).
 
-Install PKG packages remotely over your network from any device — no USB drives —
-with a live on-screen dashboard: active transfers with real-time speed and progress,
-pause/resume/stop/re-transfer controls per item, storage status, and an activity log.
+Install PKG packages remotely over your network from any device (no USB
+drives), with a live on-screen dashboard: active transfers with real-time
+speed and progress, pause/resume/stop/re-transfer controls per item,
+storage status, and an activity log.
 
 ## Highlights
 
-- **Live dashboard UI** (dark tech theme) — no more static splash screen
-- **Full pkg info on every card** — icon, title, version, content id, type, size
-- **Per-item controls** — pause, resume, stop, and re-transfer each transfer
-- **Stability first** — works with or without a network connection; the server
+- Live dashboard UI (dark tech theme): no more static splash screen
+- Full pkg info on every card: icon, title, version, content id, type, size
+- Per-item controls: pause, resume, stop, and re-transfer each transfer
+- Stability first: works with or without a network connection; the server
   starts automatically once a link is available, and the app never crashes offline
-- **Faster transfers** — adaptive multi-segment HTTP downloads for staged installs
-- **Legacy API compatible** — the original Web API is preserved 1:1, so existing
+- Faster transfers: adaptive multi-segment HTTP downloads for staged installs
+- Legacy API compatible: the original Web API is preserved 1:1, so existing
   tools (remote_installer, web frontends, scripts) keep working
-- **New v2 API** — a cleaner REST interface with job management, progress, and logs
-- **Community friendly** — plain C11, one Makefile, CI builds every push
+- New v2 API: a cleaner REST interface with job management, progress, and logs
+- Community friendly: plain C11, one Makefile, CI builds every push
 
 ## Requirements
 
@@ -45,12 +46,12 @@ grab the `.pkg` from the workflow artifacts.
 ## Usage
 
 1. Install the package on your PS4 (HEN must be active).
-2. Launch it — the dashboard shows the console's IP, storage and transfers.
+2. Launch it. The dashboard shows the console's IP, storage and transfers.
 3. Send installs from any device on the same network (see below). The
    app works with or without a network link: the server starts
    automatically once a link is available, and the app never exits on
    its own.
-4. Transfers run through the system's BGFT download manager — they
+4. Transfers run through the system's BGFT download manager, so they
    continue even after the app closes.
 
 ### On-screen controls
@@ -124,11 +125,11 @@ docs/API.md     HTTP API reference (legacy + v2)
 
 ## Credits
 
-- **flatz** — the original [Remote Package Installer](https://github.com/flatz/ps4_remote_pkg_installer)
-- **OpenOrbis Team** — the OpenOrbis PS4 Toolchain and SDL2 port
-- **DaveGamble** — [cJSON](https://github.com/DaveGamble/cJSON) (MIT)
-- **bucanero** — [dbglogger](https://github.com/bucanero/dbglogger) (MIT)
+- flatz: the original [Remote Package Installer](https://github.com/flatz/ps4_remote_pkg_installer)
+- OpenOrbis Team: the OpenOrbis PS4 Toolchain and SDL2 port
+- DaveGamble: [cJSON](https://github.com/DaveGamble/cJSON) (MIT)
+- bucanero: [dbglogger](https://github.com/bucanero/dbglogger) (MIT)
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE).
+GPL-3.0, see [LICENSE](LICENSE).
