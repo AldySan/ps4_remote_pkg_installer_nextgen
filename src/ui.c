@@ -136,6 +136,22 @@ static const char* state_name(task_state_t state)
     }
 }
 
+/* One human line for the error codes documented in this codebase;
+ * undocumented codes keep the hex-only form, nothing is invented. */
+static const char* error_hint(int error)
+{
+    switch ((uint32_t)error) {
+        case 0x80990088u: /* SCE_BGFT_ERROR_SAME_APPLICATION_ALREADY_INSTALLED (bgft.h) */
+            return "Already installed";
+        case 0x80010002u: /* ENXIO: BGFT not initialized / no foreground user (bgft.c) */
+            return "Transfer service unavailable";
+        case 0x80010016u: /* EINVAL: action not valid for this transfer state */
+            return "Not valid in this state";
+        default:
+            return NULL;
+    }
+}
+
 static void format_eta(uint32_t rest_sec, char* out, size_t outsz)
 {
     if (rest_sec == 0 || rest_sec >= 0xFFFFFFF0u) {
@@ -519,18 +535,30 @@ static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected
             strncat(val, more, sizeof(val) - strlen(val) - 1);
         }
         font_fit(val, sizeof(val),
-                 dw - 14 * font_advance(UI_SCALE_SM) - (t->error ? 280 : 0),
+                 dw - 14 * font_advance(UI_SCALE_SM) - (t->error ? 480 : 0),
                  UI_SCALE_SM);
         font_draw(r, dx, ry, UI_SCALE_SM, TXT_DIM, "SOURCE");
         font_draw(r, dx + 14 * font_advance(UI_SCALE_SM), ry, UI_SCALE_SM,
                   TXT_TEXT, val);
 
         if (t->error) {
-            char err_str[32];
-            snprintf(err_str, sizeof(err_str), "ERROR 0x%08X", t->error);
-            font_draw(r, x + w - 24 - (int)strlen(err_str) * font_advance(UI_SCALE_SM),
-                      dy + UI_DETAIL_H - font_height(UI_SCALE_SM) - 12,
-                      UI_SCALE_SM, TXT_RED, err_str);
+            const char* hint = error_hint(t->error);
+            char hex_str[16];
+            char err_str[24];
+            int adv = font_advance(UI_SCALE_SM);
+            int ey = dy + UI_DETAIL_H - font_height(UI_SCALE_SM) - 12;
+
+            snprintf(hex_str, sizeof(hex_str), "0x%08X", (uint32_t)t->error);
+            if (hint) {
+                int total = (int)(strlen(hint) + 1 + strlen(hex_str)) * adv;
+                font_draw(r, x + w - 24 - total, ey, UI_SCALE_SM, TXT_RED, hint);
+                font_draw(r, x + w - 24 - (int)strlen(hex_str) * adv, ey,
+                          UI_SCALE_SM, TXT_DIM, hex_str);
+            } else {
+                snprintf(err_str, sizeof(err_str), "ERROR %s", hex_str);
+                font_draw(r, x + w - 24 - (int)strlen(err_str) * adv, ey,
+                          UI_SCALE_SM, TXT_RED, err_str);
+            }
         }
     }
     return UI_CARD_H + UI_DETAIL_H;
