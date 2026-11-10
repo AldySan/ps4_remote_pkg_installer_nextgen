@@ -34,11 +34,13 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
 
 size_t sceLibcHeapSize = 256 * 1024 * 1024;
 
 static SDL_Window* s_window = NULL;
 static SDL_Renderer* s_renderer = NULL;
+static bool s_ui_ok = false;   /* false = running headless (API only) */
 
 static bool s_running = true;
 
@@ -123,7 +125,9 @@ static void handle_pad_frame(void)
 
 static void draw_frame(void)
 {
-    ui_frame(s_renderer);
+    if (s_ui_ok) {
+        ui_frame(s_renderer);
+    }
 }
 
 int main(void)
@@ -162,37 +166,54 @@ int main(void)
         LOG_WARN("pad unavailable; control continues through the web dashboard");
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        LOG_ERROR("SDL_Init failed: %s", SDL_GetError());
-        goto err_pad_fini;
+    if (SDL_Init(SDL_INIT_VIDEO) == 0) {
+        s_window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, 0);
+        if (s_window) {
+            s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+            if (!s_renderer) {
+                /*
+                 * The PS4 SDL2 port ships only the software renderer: the sole
+                 * registered driver does not advertise SDL_RENDERER_ACCELERATED,
+                 * so the request above can never be satisfied there and used to
+                 * abort startup before a single frame was drawn (issue #42).
+                 * Fall back to the default driver; the software path presents
+                 * through the window surface on its own.
+                 */
+                s_renderer = SDL_CreateRenderer(s_window, -1, 0);
+            }
+            if (s_renderer && ui_init(s_renderer)) {
+                s_ui_ok = true;
+            }
+        }
     }
 
-    s_window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, 0);
-    if (!s_window) {
-        LOG_ERROR("SDL_CreateWindow failed: %s", SDL_GetError());
-        goto err_sdl_quit;
-    }
-
-    s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!s_renderer) {
+    if (!s_ui_ok) {
         /*
-         * The PS4 SDL2 port ships only the software renderer: the sole
-         * registered driver does not advertise SDL_RENDERER_ACCELERATED,
-         * so the request above can never be satisfied there and used to
-         * abort startup before a single frame was drawn (issue #42).
-         * Fall back to the default driver; the software path presents
-         * through the window surface on its own.
+         * The dashboard is the local view of the app, not its life
+         * support. When any video-side step fails (SDL_Init, window,
+         * renderer, font atlas) the app degrades to running headless
+         * instead of aborting: the HTTP API and the web dashboard keep
+         * serving installs, and OPTIONS on the pad still exits. Tearing
+         * the partial video state down keeps the shutdown path simple.
          */
-        s_renderer = SDL_CreateRenderer(s_window, -1, 0);
-    }
-    if (!s_renderer) {
-        LOG_ERROR("SDL_CreateRenderer failed: %s", SDL_GetError());
-        goto err_window_destroy;
-    }
-
-    if (!ui_init(s_renderer)) {
-        LOG_ERROR("ui_init failed: %s", SDL_GetError());
-        goto err_window_destroy;
+        char reason[128];
+        snprintf(reason, sizeof(reason), "%s", SDL_GetError());
+        if (s_renderer) {
+            SDL_DestroyRenderer(s_renderer);
+            s_renderer = NULL;
+        }
+        if (s_window) {
+            SDL_DestroyWindow(s_window);
+            s_window = NULL;
+        }
+        if (SDL_WasInit(SDL_INIT_VIDEO)) {
+            SDL_Quit();
+        }
+        if (reason[0]) {
+            LOG_WARN("ui unavailable (%s); running headless, use the web dashboard", reason);
+        } else {
+            LOG_WARN("ui unavailable; running headless, use the web dashboard");
+        }
     }
 
     /*
@@ -231,17 +252,25 @@ int main(void)
         }
     }
 
-    LOG_INFO("dashboard running");
+    if (s_ui_ok) {
+        LOG_INFO("dashboard running");
+    } else {
+        LOG_INFO("running headless (web dashboard only)");
+    }
 
     while (s_running) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT) {
-                s_running = false;
-            }
-        }
         handle_pad_frame();
-        draw_frame();
+        if (s_ui_ok) {
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_QUIT) {
+                    s_running = false;
+                }
+            }
+            draw_frame();
+        } else {
+            usleep(100 * 1000); /* 10 Hz is plenty when nobody is watching */
+        }
     }
 
     LOG_INFO("shutting down");
@@ -252,15 +281,19 @@ int main(void)
      * tears the subsystem down entirely: freeing them afterwards (as the
      * old order did) is a use-after-free at exit. */
     server_stop();
-    ui_fini();
+    if (s_ui_ok) {
+        ui_fini();
+    }
     taskman_stop();
     bgft_fini();
     appinst_fini();
     netmon_stop();
 
-    SDL_DestroyRenderer(s_renderer);
-    SDL_DestroyWindow(s_window);
-    SDL_Quit();
+    if (s_ui_ok) {
+        SDL_DestroyRenderer(s_renderer);
+        SDL_DestroyWindow(s_window);
+        SDL_Quit();
+    }
     pad_fini();
 
     if (s_user_service_owned) {
@@ -271,24 +304,6 @@ int main(void)
     dbglogger_stop();
 
     return 0;
-
-err_window_destroy:
-    /* Reached with or without a renderer (SDL_DestroyRenderer tolerates
-     * NULL); both window and renderer must go before SDL_Quit. */
-    SDL_DestroyRenderer(s_renderer);
-    s_renderer = NULL;
-    SDL_DestroyWindow(s_window);
-    s_window = NULL;
-
-err_sdl_quit:
-    SDL_Quit();
-
-err_pad_fini:
-    pad_fini();
-
-    if (s_user_service_owned) {
-        sceUserServiceTerminate();
-    }
 
 err_modules_unload:
     modules_unload();
