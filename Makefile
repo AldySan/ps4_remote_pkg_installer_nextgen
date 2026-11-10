@@ -19,7 +19,8 @@ LIBS        := -lc -lkernel -lc++ \
                -lSceSysmodule -lSceSystemService -lSceUserService \
                -lSceNetCtl -lSceNet -lSceSsl -lSceHttp -lSceNpCommon \
                -lSceAppInstUtil -lSceBgft \
-               -lSceVideoOut -lSceAudioOut -lScePad -lSceFreeType -lSDL2
+               -lSceVideoOut -lSceAudioOut -lScePad -lSceFreeType \
+               -lSDL2 -lScePigletv2VSH
 
 # Additional compile flags.
 EXTRAFLAGS  := -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 -g \

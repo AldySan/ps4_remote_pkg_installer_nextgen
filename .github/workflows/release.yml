@@ -30,7 +30,7 @@ jobs:
       - name: Install toolchain dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang lld python3
+          sudo apt-get install -y -qq clang lld python3 cmake
 
       - name: Host unit tests (portable core)
         run: make test
@@ -47,6 +47,31 @@ jobs:
         run: |
           mkdir -p OpenOrbis
           curl -sL "$TOOLCHAIN_URL" | tar xz -C ./
+
+      - name: Checkout SDL-PS4
+        uses: actions/checkout@v4
+        with:
+          repository: bucanero/SDL-PS4
+          ref: ps4
+          path: SDL-PS4
+
+      - name: Cache SDL-PS4 library
+        id: cache-sdl2
+        uses: actions/cache@v4
+        with:
+          path: SDL-PS4/orbis/libSDL2.a
+          key: sdl-ps4-bucanero-ps4-linux-v1
+
+      - name: Build SDL-PS4 (Piglet GPU renderer)
+        if: steps.cache-sdl2.outputs.cache-hit != 'true'
+        working-directory: SDL-PS4
+        run: |
+          mkdir -p orbis
+          cmake -S . -B orbis --toolchain cmake/openorbis.cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build orbis -j "$(nproc)"
+
+      - name: Install SDL-PS4 into toolchain
+        run: cp SDL-PS4/orbis/libSDL2.a "${OO_PS4_TOOLCHAIN}/lib/"
 
       - name: Build
         run: make
