@@ -121,6 +121,7 @@ thirdparty/     vendored cJSON + dbglogger (MIT), custom libSceBgft stub
 tools/          asset/font generators, host unit tests
 tests/data/     unit test fixtures
 docs/API.md     HTTP API reference (legacy + v2)
+DESIGN.md       design direction and palette for the dashboard
 ```
 
 ## Credits
