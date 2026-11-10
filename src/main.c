@@ -172,12 +172,15 @@ int main(void)
             s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
             if (!s_renderer) {
                 /*
-                 * The toolchain's SDL2 build registers a GLES2 renderer backed
-                 * by Piglet (the console's OpenGL ES module), so the request
-                 * above selects the GPU and presents with vsync. When that
-                 * cannot be satisfied the request falls back to any driver:
-                 * the software path still presents through the video core's
-                 * texture-backed window framebuffer.
+                 * The toolchain's SDL2 build registers exactly one driver:
+                 * a GLES2 renderer backed by Piglet (the console's OpenGL ES
+                 * module), so the request above selects the GPU and presents
+                 * with vsync. There is no CPU fallback tier in this build:
+                 * the software renderer is not registered and the fork's
+                 * video core implements no window framebuffer anyway, so the
+                 * retry below just re-asks GLES2 without flag requirements.
+                 * When that fails as well, the app degrades to headless
+                 * below and the web dashboard keeps serving installs.
                  */
                 s_renderer = SDL_CreateRenderer(s_window, -1, 0);
             }
