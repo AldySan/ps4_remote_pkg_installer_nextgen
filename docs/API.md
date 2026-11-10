@@ -1,11 +1,11 @@
-# Remote PKG Installer NextGen — HTTP API Reference
+# Remote PKG Installer NextGen: HTTP API Reference
 
 The app serves two APIs on port **12800** (configurable at build time):
 
-- **Legacy API** (`/api/...`) — 100% compatible with the original
+- **Legacy API** (`/api/...`): 100% compatible with the original
   [Remote Package Installer](https://github.com/flatz/ps4_remote_pkg_installer).
   Every existing tool, web frontend and script keeps working unmodified.
-- **v2 API** (`/api/v2/...`) — a cleaner interface with job management,
+- **v2 API** (`/api/v2/...`): a cleaner interface with job management,
   progress with derived speed/percent, storage and logs.
 
 All requests are HTTP/1.1. Legacy endpoints are `POST` with JSON bodies.
@@ -46,7 +46,7 @@ Failures return either `{"status": "fail", "error": "message"}` (HTTP 500)
 or `{"status": "fail", "error_code": 0x80990088}` (HTTP 200), matching
 the original wire format.
 
-> **Transfer acceleration** — pieces are streamed through the app's
+> **Transfer acceleration**: pieces are streamed through the app's
 > internal proxy with up to 4 parallel HTTP Range connections when the
 > source server supports ranges and the piece is at least 8 MB. No client
 > changes needed.
@@ -69,14 +69,14 @@ the original wire format.
 }
 ```
 
-(All values are unquoted JSON numbers — lengths as hex, counters and
-percent as decimal — identical to the original wire format. `error` is
+(All values are unquoted JSON numbers: lengths as hex, counters and
+percent as decimal, identical to the original wire format. `error` is
 the BGFT error result.)
 
 ### Task control
 
 `POST /api/start_task` / `stop_task` / `pause_task` / `resume_task` /
-`unregister_task` — all take `{ "task_id": N }` and return
+`unregister_task`: all take `{ "task_id": N }` and return
 `{"status": "success"}` or `{"status": "fail", "error_code": 0x...}`.
 
 ### `POST /api/find_task`
@@ -228,7 +228,7 @@ Last 64 log entries (level + message):
 
 ## Wire-format notes for legacy compatibility
 
-- Success bodies use spaces after colons (`{ "status": "success" }`) —
+- Success bodies use spaces after colons (`{ "status": "success" }`),
   exactly like the original.
 - Error bodies: parameter problems return HTTP 500 with
   `{ "status": "fail", "error": "message" }`; BGFT-level failures return
