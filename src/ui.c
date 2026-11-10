@@ -432,10 +432,10 @@ static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected
     } else {
         ver_str[0] = '\0';
     }
-    snprintf(line, sizeof(line), "%s%s%s   %s   job #%d   bgft %d",
+    snprintf(line, sizeof(line), "%s%s%s   %s   job #%d",
              t->content_id[0] ? t->content_id : "-",
              t->is_patch ? "  [PATCH]" : "",
-             ver_str, size_str, t->id, t->bgft_task_id);
+             ver_str, size_str, t->id);
     font_fit(line, sizeof(line), w - (tx - x) - 360, UI_SCALE_SM);
     font_draw(r, tx, y + 60, UI_SCALE_SM, TXT_DIM, line);
 
@@ -508,12 +508,8 @@ static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected
         /* Right column. */
         ry = dy + 16;
         ry = draw_kv(r, x2, ry, "SIZE", size_str, TXT_TEXT);
-        if (t->piece_count > 0) {
-            snprintf(val, sizeof(val), "%u", t->piece_count);
-        } else {
-            snprintf(val, sizeof(val), "-");
-        }
-        ry = draw_kv(r, x2, ry, "PIECES", val, TXT_TEXT);
+        util_format_size(t->transferred_total, val, sizeof(val));
+        ry = draw_kv(r, x2, ry, "TRANSFERRED", val, TXT_TEXT);
         snprintf(val, sizeof(val), "%s   eta %s", speed_str, eta_str);
         ry = draw_kv(r, x2, ry, "SPEED", val, TXT_TEXT);
         draw_kv(r, x2, ry, "STATE", state_name(t->state), state_col);
