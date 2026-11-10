@@ -221,7 +221,7 @@ int main(void)
     /* Stop services first. ui_fini() destroys the icon textures and the
      * font atlas, which must happen while their renderer still exists:
      * SDL_DestroyRenderer frees every texture it created, and SDL_Quit()
-     * tears the subsystem down entirely — freeing them afterwards (as the
+     * tears the subsystem down entirely: freeing them afterwards (as the
      * old order did) is a use-after-free at exit. */
     server_stop();
     ui_fini();

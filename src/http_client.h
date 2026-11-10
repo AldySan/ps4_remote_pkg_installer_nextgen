@@ -52,7 +52,7 @@ void http_session_close(http_session_t* session);
 
 /*
  * Range GET reusing *psess (opened on first use; rebound automatically on
- * transport failure, e.g. a stale keep-alive connection — one retry).
+ * transport failure, e.g. a stale keep-alive connection; one retry).
  * Same result semantics as http_client_get. Safe to pass the same session
  * from a single thread only.
  */

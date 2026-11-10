@@ -3,7 +3,7 @@
  * Copyright (c) 2025-present AldySan and contributors.
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  *
- * GENERATED FILE — bitmap font (ASCII 32..126, 12x21 cells, 1bpp).
+ * GENERATED FILE: bitmap font (ASCII 32..126, 12x21 cells, 1bpp).
  * Regenerate with: python3 tools/gen_font.py
  */
 #pragma once

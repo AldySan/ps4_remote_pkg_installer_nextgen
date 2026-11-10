@@ -60,9 +60,8 @@ static Uint32 s_last_action = 0;
 static bool s_details = false;      /* TRI: expand selected card's pkg info */
 static SDL_Renderer* s_renderer = NULL;
 
-/* Decoded icon textures, keyed by job id + icon path. Decoding is
- * intentionally budgeted to one new icon per frame so a batch of new
- * jobs cannot stall the render loop. */
+/* Icon textures keyed by job id + path; one decode per frame so a batch
+ * of new jobs cannot stall the render loop. */
 struct icon_slot {
     int job_id;
     char path[64];
@@ -158,20 +157,15 @@ static void format_speed(double bps, char* out, size_t outsz)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Job list snapshot                                                   */
-/* ------------------------------------------------------------------ */
+/* Job list snapshot */
 
 struct ui_jobs {
     task_info_t items[UI_MAX_JOBS];
     int count;
 };
 
-/* Shared render-thread snapshot. A 32-entry snapshot is ~85 KB: keeping
- * it on the stack made every draw/action frame carry that much, and the
- * main thread stack size on PS4 is an undocumented kernel default (the
- * OpenOrbis crt leaves the proc param stack slot unset). All callers
- * run on the render thread, so one reusable buffer is safe. */
+/* 32-entry snapshot (~85 KB), too large for the PS4 render-thread stack
+ * (kernel default size, undocumented); all callers run on that thread. */
 static struct ui_jobs s_jobs;
 
 static bool ui_collect_cb(const task_info_t* t, void* arg);
@@ -198,9 +192,7 @@ static bool ui_collect_cb(const task_info_t* t, void* arg)
     return true;
 }
 
-/* ------------------------------------------------------------------ */
-/* Pkg icon cache + info helpers                                       */
-/* ------------------------------------------------------------------ */
+/* Pkg icon cache + info helpers */
 
 /* BGFT-facing icon path is /user/data/...; the app reads the same file
  * through its own /data/... mount. */
@@ -235,10 +227,9 @@ static SDL_Texture* icon_texture(const task_info_t* t, int* out_w, int* out_h)
         }
     }
     if (!slot) {
-        /* Take the least recently used slot and re-key it for this job.
-         * Never-used slots (last_used == 0) win over any used one, so a
-         * fresh cache fills slot by slot; the re-key below is mandatory:
-         * the victim still carries a previous (or zero-initialized) key. */
+        /* Take the LRU slot; never-used slots win so a fresh cache fills
+         * in order, and the re-key below is mandatory (the victim still
+         * carries its old key). */
         slot = victim;
         if (slot->tex) {
             SDL_DestroyTexture(slot->tex);
@@ -331,9 +322,7 @@ static int draw_kv(SDL_Renderer* r, int x, int y, const char* key,
     return y + font_height(UI_SCALE_SM) + 9;
 }
 
-/* ------------------------------------------------------------------ */
-/* Panels                                                             */
-/* ------------------------------------------------------------------ */
+/* Panels */
 
 static void draw_header(SDL_Renderer* r)
 {
@@ -482,7 +471,7 @@ static int draw_card(SDL_Renderer* r, const task_info_t* t, int y, bool selected
         return UI_CARD_H;
     }
 
-    /* ---- Expandable details panel: full pkg information ---- */
+    /* Expandable details panel: full pkg information */
     {
         char val[600];
         char title_id[24];
@@ -645,12 +634,10 @@ static void draw_footer(SDL_Renderer* r)
               "dpad select    X pause/resume    O stop    [ ] re-transfer    TRI details    OPTIONS exit");
 }
 
-/* ------------------------------------------------------------------ */
-/* Actions                                                             */
-/* ------------------------------------------------------------------ */
+/* Actions */
 
-/* Runs the install pipeline off the UI thread (prepare involves network
- * round-trips: header/entry/sfo/icon fetches + one probe per piece). */
+/* Runs the install pipeline off the UI thread: prepare does network
+ * round-trips (header/entry/sfo/icon fetches, one probe per piece). */
 struct retry_ctx {
     char url[TASK_URL_MAX];
     bool is_ref;
