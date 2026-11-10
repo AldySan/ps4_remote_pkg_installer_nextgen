@@ -11,7 +11,7 @@ storage status, and an activity log.
 
 ## Highlights
 
-- Live dashboard UI (dark tech theme): no more static splash screen
+- Live dashboard UI (calm blue-black theme): no more static splash screen
 - Full pkg info on every card: icon, title, version, content id, type, size
 - Per-item controls: pause, resume, stop, and re-transfer each transfer
 - Stability first: works with or without a network connection; the server
