@@ -4,11 +4,13 @@
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  */
 #include "ui.h"
+#include "crash.h"
 #include "font.h"
 #include "icon.h"
 #include "installer.h"
 #include "log.h"
 #include "netmon.h"
+#include "notify.h"
 #include "server.h"
 #include "storage.h"
 #include "taskman.h"
@@ -670,7 +672,22 @@ static void* retry_thread(void* arg)
 {
     struct retry_ctx* ctx = (struct retry_ctx*)arg;
     install_result_t result;
-    char err[256];
+    char err[256] = "";
+    sigjmp_buf fault_jb;
+
+    /* This runs the full install pipeline (remote pkg/SFO parsing, BGFT
+     * registration) off the UI thread, so it needs the same fault
+     * recovery net as the other service threads: without it one corrupt
+     * pkg would take the whole app down instead of failing the transfer. */
+    if (sigsetjmp(fault_jb, 1) != 0) {
+        crash_disarm();
+        LOG_WARN("ui: re-transfer abandoned after an internal fault");
+        notify_send("%s: re-transfer stopped after an internal error",
+                    APP_SHORT_NAME);
+        free(ctx);
+        return NULL;
+    }
+    crash_arm(&fault_jb);
 
     if (ctx->is_ref) {
         if (!installer_install_ref_pkg_url(ctx->url, &result, err, sizeof(err))) {
@@ -682,6 +699,7 @@ static void* retry_thread(void* arg)
             LOG_WARN("ui: re-transfer failed: %s", err);
         }
     }
+    crash_disarm();
     free(ctx);
     return NULL;
 }
