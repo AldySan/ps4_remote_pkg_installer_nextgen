@@ -17,6 +17,7 @@
 #include "bgft.h"
 #include "http_client.h"
 #include "log.h"
+#include "modules.h"
 #include "netmon.h"
 #include "pkg.h"
 #include "proxy.h"
@@ -27,6 +28,7 @@
 
 #include <orbis/SystemService.h>
 #include <orbis/_types/sys_service.h>
+#include <orbis/_types/sysmodule.h>
 
 #include <cJSON.h>
 
@@ -47,6 +49,11 @@ static int get_system_lang(void)
 {
     int32_t lang = 1; /* default: English (US) */
     int ret;
+
+    if (!modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_SYSTEM_SERVICE)) {
+        LOG_WARN("installer: system service unavailable; defaulting to English");
+        return 1;
+    }
 
     ret = sceSystemServiceParamGetInt(ORBIS_SYSTEM_SERVICE_PARAM_ID_LANG, &lang);
     if (ret != 0) {

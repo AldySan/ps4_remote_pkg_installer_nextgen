@@ -6,10 +6,13 @@
 #include "server.h"
 #include "appinst.h"
 #include "bgft.h"
+#include "crash.h"
 #include "http_client.h"
 #include "installer.h"
 #include "log.h"
+#include "modules.h"
 #include "netmon.h"
+#include "notify.h"
 #include "proxy.h"
 #include "storage.h"
 #include "taskman.h"
@@ -18,10 +21,12 @@
 
 #include <orbis/Net.h>
 #include <orbis/_types/net.h>
+#include <orbis/_types/sysmodule.h>
 
 #include <cJSON.h>
 
 #include <pthread.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1168,8 +1173,20 @@ static bool conn_read_request(OrbisNetId fd, struct http_request* req)
 
 static void* conn_thread(void* arg)
 {
-    OrbisNetId fd = (OrbisNetId)(intptr_t)arg;
+    volatile OrbisNetId fd = (OrbisNetId)(intptr_t)arg;
     struct http_request req;
+    sigjmp_buf fault_jb;
+
+    if (sigsetjmp(fault_jb, 1) != 0) {
+        crash_disarm();
+        LOG_WARN("connection dropped after an internal fault");
+        sceNetSocketClose(fd);
+        pthread_mutex_lock(&s_lock);
+        --s_active_conns;
+        pthread_mutex_unlock(&s_lock);
+        return NULL;
+    }
+    crash_arm(&fault_jb);
 
     if (conn_read_request(fd, &req)) {
         route(fd, req.method, req.path, req.body, req.body_len);
@@ -1183,12 +1200,25 @@ static void* conn_thread(void* arg)
     pthread_mutex_lock(&s_lock);
     --s_active_conns;
     pthread_mutex_unlock(&s_lock);
+    crash_disarm();
     return NULL;
 }
 
 static void* accept_thread(void* arg)
 {
+    sigjmp_buf fault_jb;
+
     (void)arg;
+
+    if (sigsetjmp(fault_jb, 1) != 0) {
+        crash_disarm();
+        s_running = false;
+        LOG_WARN("server thread stopped after an internal fault");
+        notify_send("%s: web dashboard stopped after an internal error",
+                    APP_SHORT_NAME);
+        return NULL;
+    }
+    crash_arm(&fault_jb);
 
     while (s_running) {
         struct server_sockaddr_in addr;
@@ -1245,6 +1275,7 @@ static void* accept_thread(void* arg)
             sceNetSocketClose(fd);
         }
     }
+    crash_disarm();
     return NULL;
 }
 
@@ -1270,6 +1301,11 @@ bool server_start(int port)
     }
     if (netmon_mem_id() < 0) {
         LOG_WARN("server: network stack not ready");
+        pthread_mutex_unlock(&s_lock);
+        return false;
+    }
+    if (!modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_NET)) {
+        LOG_WARN("server: net module unavailable");
         pthread_mutex_unlock(&s_lock);
         return false;
     }
