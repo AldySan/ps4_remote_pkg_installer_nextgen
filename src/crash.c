@@ -26,10 +26,12 @@
 #include <string.h>
 #include <unistd.h>
 
-/* One slot per armed thread: worst case is a full connection set, all
- * prefetch workers, the long-lived services and the main thread. An
- * exhausted table still exits cleanly through the unregistered path. */
-#define CRASH_MAX_THREADS 32
+/* One slot per armed thread. The worst case already sums past 32:
+ * 16 server connections + two prefetch streams x 8 workers + the
+ * long-lived services (server, taskman, netmon, proxy, UI) + main.
+ * A thread that fails to register loses the recovery net entirely,
+ * so its first fault ends the app; 64 leaves headroom for that mix. */
+#define CRASH_MAX_THREADS 64
 
 /* The kernel takes FreeBSD signal numbers while the toolchain headers
  * carry Linux ones (SIGBUS is 10 on the console, 7 in the headers). */

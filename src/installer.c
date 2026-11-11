@@ -32,6 +32,7 @@
 
 #include <cJSON.h>
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,7 +44,11 @@
 /* Zero mini-digest placeholder, exactly like the original manifests. */
 static const uint8_t s_zero_mini_digest[PKG_DIGEST_SIZE - 12] = { 0 };
 
+/* Serials must stay unique across concurrent installs: an API request and
+ * a dashboard re-transfer can both run prepare() at the same time, and two
+ * identical serials would collide on the same manifest/icon tmp files. */
 static uint32_t s_tmp_counter = 0;
+static pthread_mutex_t s_tmp_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int get_system_lang(void)
 {
@@ -166,8 +171,15 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
     }
     lang = get_system_lang();
 
-    snprintf(tmp_name, sizeof(tmp_name), "tmp_%06x%04x",
-             s_tmp_counter++, (unsigned)job_id & 0xFFFF);
+    {
+        unsigned serial;
+
+        pthread_mutex_lock(&s_tmp_lock);
+        serial = s_tmp_counter++;
+        pthread_mutex_unlock(&s_tmp_lock);
+        snprintf(tmp_name, sizeof(tmp_name), "tmp_%06x%04x",
+                 serial, (unsigned)job_id & 0xFFFF);
+    }
     snprintf(manifest_path, sizeof(manifest_path),
              INSTALLER_WORK_DIR "/%s.json", tmp_name);
     snprintf(icon_path, sizeof(icon_path),
@@ -190,6 +202,10 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
         }
         if (r.body_len != PKG_HEADER_SIZE) {
             INSTALL_FAIL("pkg header size mismatch for '%s'", urls[0]);
+        }
+        if (!r.partial) {
+            INSTALL_FAIL("server ignored the range request for '%s' (HTTP %d)",
+                         urls[0], r.status);
         }
     }
     if (!pkg_parse_header(hdr_buf, PKG_HEADER_SIZE, &hdr)) {
@@ -214,6 +230,10 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
         }
         if (!HTTP_IS_OK(r.status) || r.body_len != table_size) {
             INSTALL_FAIL("entry table size mismatch for '%s'", urls[0]);
+        }
+        if (!r.partial) {
+            INSTALL_FAIL("server ignored the range request for '%s' (HTTP %d)",
+                         urls[0], r.status);
         }
     }
 
@@ -242,6 +262,9 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
                     !HTTP_IS_OK(r.status) || r.body_len != sfo_size) {
                     INSTALL_FAIL("unable to download param.sfo for '%s'", urls[0]);
                 }
+                if (!r.partial) {
+                    INSTALL_FAIL("server ignored the range request for '%s'", urls[0]);
+                }
             } else if (entry.id == PKG_ENTRY_ID_ICON0_PNG && !icon_size &&
                        entry.size > 0 && entry.size < 0x1000000) {
                 http_result_t r;
@@ -254,6 +277,9 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
                                      icon_buf, icon_size, &r) ||
                     !HTTP_IS_OK(r.status) || r.body_len != icon_size) {
                     INSTALL_FAIL("unable to download icon0.png for '%s'", urls[0]);
+                }
+                if (!r.partial) {
+                    INSTALL_FAIL("server ignored the range request for '%s'", urls[0]);
                 }
             }
         }

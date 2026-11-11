@@ -189,7 +189,7 @@ static void* worker_run(prefetch_t* pf)
         }
 
         if (!http_client_get_session(&sess, pf->url, off, want, buf, want, &r) ||
-            !HTTP_IS_OK(r.status) || r.body_len != want) {
+            !HTTP_IS_OK(r.status) || !r.partial || r.body_len != want) {
             pthread_mutex_lock(&pf->lock);
             if (pf->chunk_state[c] == CHUNK_CLAIMED) {
                 pf->chunk_state[c] = CHUNK_FAILED;
@@ -198,8 +198,18 @@ static void* worker_run(prefetch_t* pf)
             pthread_cond_broadcast(&pf->data_avail);
             pthread_cond_broadcast(&pf->work_avail);
             pthread_mutex_unlock(&pf->lock);
-            LOG_WARN("prefetch: chunk %zu failed at offset %llu (HTTP %d)",
-                     c, (unsigned long long)off, r.status);
+            if (HTTP_IS_OK(r.status) && !r.partial) {
+                /* A 200 answer to a Range request means the body starts at
+                 * byte 0, not at the requested offset: accepting it would
+                 * stream wrong bytes into the ring buffer silently and the
+                 * install would only fail much later at the digest check. */
+                LOG_ERROR("prefetch: server ignored the range request for "
+                           "chunk %zu at offset %llu (HTTP %d)",
+                           c, (unsigned long long)off, r.status);
+            } else {
+                LOG_WARN("prefetch: chunk %zu failed at offset %llu (HTTP %d)",
+                         c, (unsigned long long)off, r.status);
+            }
             http_session_close(sess);
             free(buf);
             return NULL;

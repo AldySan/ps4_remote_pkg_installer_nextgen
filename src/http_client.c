@@ -30,6 +30,7 @@
 #include <orbis/Ssl.h>
 #include <orbis/_types/sysmodule.h>
 
+#include <ctype.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,6 +159,31 @@ static int create_template(void)
     return tpl;
 }
 
+/* Case-insensitive substring search. Response header names arrive in
+ * arbitrary casing (Content-Range:, content-range:, Content-range:),
+ * and a missed header silently misreads the piece size. */
+static const char* strstr_ci(const char* hay, const char* needle)
+{
+    size_t nlen = strlen(needle);
+    size_t i;
+
+    if (nlen == 0) {
+        return hay;
+    }
+    for (; *hay; ++hay) {
+        for (i = 0; i < nlen; ++i) {
+            if (tolower((unsigned char)hay[i]) !=
+                tolower((unsigned char)needle[i]) || hay[i] == '\0') {
+                break;
+            }
+        }
+        if (i == nlen) {
+            return hay;
+        }
+    }
+    return NULL;
+}
+
 /* Parses "Content-Range: bytes 0-0/123456" total part. */
 static bool parse_content_range_total(const char* headers, uint64_t* total)
 {
@@ -168,10 +194,7 @@ static bool parse_content_range_total(const char* headers, uint64_t* total)
     if (!headers || !total) {
         return false;
     }
-    p = strstr(headers, "content-range:");
-    if (!p) {
-        p = strstr(headers, "Content-Range:");
-    }
+    p = strstr_ci(headers, "content-range:");
     if (!p) {
         return false;
     }

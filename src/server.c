@@ -38,6 +38,7 @@
 
 #define SERVER_SOL_SOCKET  0xffff
 #define SERVER_SO_REUSEADDR 0x0004
+#define SERVER_SO_SNDTIMEO  0x1005
 #define SERVER_SO_RCVTIMEO  0x1006
 
 struct server_sockaddr_in {
@@ -326,7 +327,7 @@ static void handle_api_install(OrbisNetId fd, const char* body, size_t body_len)
     cJSON* root = parse_body(body, body_len);
     const cJSON* type;
     install_result_t result;
-    char err[256];
+    char err[256] = "";
     char title_esc[512];
 
     if (!root) {
@@ -365,7 +366,21 @@ static void handle_api_install(OrbisNetId fd, const char* body, size_t body_len)
         const cJSON* it = NULL;
         cJSON_ArrayForEach(it, packages) {
             if (cJSON_IsString(it) && it->valuestring[0] != '\0') {
-                urls[i++] = strdup(it->valuestring);
+                char* dup = strdup(it->valuestring);
+
+                if (!dup) {
+                    size_t j;
+
+                    for (j = 0; j < i; ++j) {
+                        free(urls[j]);
+                    }
+                    free(urls);
+                    cJSON_Delete(root);
+                    resp_error(fd, 500, "Internal server error",
+                               "Out of memory.");
+                    return;
+                }
+                urls[i++] = dup;
             }
         }
         if (i != count) {
@@ -696,37 +711,70 @@ static void v2_task_json(const task_info_t* t, char* out, size_t outsz)
              t->rest_sec_total, t->num_index, t->num_total);
 }
 
-struct jobs_list_ctx {
-    OrbisNetId fd;
-    bool first;
+struct jobs_snap {
+    task_info_t* items;
+    size_t cap;
+    size_t count;
+    bool oom;
 };
 
-static bool jobs_list_cb(const task_info_t* t, void* arg)
+/* Copies each task while the registry lock is held; the JSON is
+ * serialized and sent only after taskman_foreach has released it. */
+static bool jobs_snap_cb(const task_info_t* t, void* arg)
 {
-    struct jobs_list_ctx* ctx = (struct jobs_list_ctx*)arg;
-    char item[900];
+    struct jobs_snap* snap = (struct jobs_snap*)arg;
 
-    if (!ctx->first) {
-        conn_send_str(ctx->fd, ",");
+    if (snap->count == snap->cap) {
+        size_t ncap = snap->cap ? snap->cap * 2 : 8;
+        task_info_t* grown;
+
+        grown = (task_info_t*)realloc(snap->items, ncap * sizeof(*grown));
+        if (!grown) {
+            snap->oom = true;
+            return false; /* out of memory; stop iterating */
+        }
+        snap->items = grown;
+        snap->cap = ncap;
     }
-    ctx->first = false;
-    v2_task_json(t, item, sizeof(item));
-    conn_send_str(ctx->fd, item);
+    snap->items[snap->count++] = *t;
     return true;
 }
 
 static void handle_v2_jobs(OrbisNetId fd, const char* path)
 {
-    struct jobs_list_ctx ctx;
-
     /* /api/v2/jobs or /api/v2/jobs/<id> */
     if (path[0] == '\0') {
+        struct jobs_snap snap;
+        size_t i;
+
+        /* Never touch the socket while holding the taskman lock: the UI
+         * thread and the progress pollers take the same lock every frame
+         * and every poll, so one stalled dashboard client would freeze
+         * them all. Snapshot (a fast copy) first, send after the unlock. */
+        snap.items = NULL;
+        snap.cap = 0;
+        snap.count = 0;
+        snap.oom = false;
+        taskman_foreach(jobs_snap_cb, &snap);
+        if (snap.oom) {
+            free(snap.items);
+            resp_error(fd, 500, "Internal server error", "Out of memory.");
+            return;
+        }
+
         resp_headers_json(fd);
         conn_send_str(fd, "{\"status\":\"success\",\"data\":{\"jobs\":[");
-        ctx.fd = fd;
-        ctx.first = true;
-        taskman_foreach(jobs_list_cb, &ctx);
+        for (i = 0; i < snap.count; ++i) {
+            char item[900];
+
+            if (i > 0) {
+                conn_send_str(fd, ",");
+            }
+            v2_task_json(&snap.items[i], item, sizeof(item));
+            conn_send_str(fd, item);
+        }
         conn_send_str(fd, "]}}\n");
+        free(snap.items);
         return;
     }
 
@@ -876,7 +924,21 @@ static void handle_v2_install(OrbisNetId fd, const char* body, size_t body_len)
             }
             cJSON_ArrayForEach(it, urls) {
                 if (cJSON_IsString(it) && it->valuestring[0] != '\0' && i < count) {
-                    list[i++] = strdup(it->valuestring);
+                    char* dup = strdup(it->valuestring);
+
+                    if (!dup) {
+                        size_t j;
+
+                        for (j = 0; j < i; ++j) {
+                            free(list[j]);
+                        }
+                        free(list);
+                        cJSON_Delete(root);
+                        resp_error(fd, 500, "Internal server error",
+                                   "Out of memory.");
+                        return;
+                    }
+                    list[i++] = dup;
                 }
             }
             ok = installer_install_direct((const char* const*)list, i, &result,
@@ -1239,18 +1301,25 @@ static void* accept_thread(void* arg)
             continue;
         }
 
-        /* Bound how long a client may stall the request read. Without a
-         * receive timeout a half-open connection (peer vanished without a
-         * TCP RST: power loss, dropped wifi) parks its worker in
-         * sceNetRecv forever, and enough of them exhaust SERVER_MAX_CONNS
-         * until every new client is answered 503. Real clients send the
-         * whole request right after connecting, so 30s per recv is ample. */
+        /* Bound how long a client may stall the request read and the
+         * response write. Without a receive timeout a half-open
+         * connection (peer vanished without a TCP RST: power loss,
+         * dropped wifi) parks its worker in sceNetRecv forever; without
+         * a send timeout a client that stops reading mid-response
+         * (dashboard tab closed while polling, phone locked) parks it
+         * in sceNetSend instead. Enough parked workers exhaust
+         * SERVER_MAX_CONNS until every new client is answered 503. Real
+         * clients send the whole request right after connecting and
+         * drain the response immediately, so 30s per direction is ample. */
         {
-            struct timeval recv_to;
-            recv_to.tv_sec = 30;
-            recv_to.tv_usec = 0;
+            struct timeval to;
+
+            to.tv_sec = 30;
+            to.tv_usec = 0;
             sceNetSetsockopt(fd, SERVER_SOL_SOCKET, SERVER_SO_RCVTIMEO,
-                             &recv_to, sizeof(recv_to));
+                             &to, sizeof(to));
+            sceNetSetsockopt(fd, SERVER_SOL_SOCKET, SERVER_SO_SNDTIMEO,
+                             &to, sizeof(to));
         }
 
         pthread_mutex_lock(&s_lock);
