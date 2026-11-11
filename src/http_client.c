@@ -21,12 +21,14 @@
  */
 #include "http_client.h"
 #include "log.h"
+#include "modules.h"
 #include "netmon.h"
 #include "version.h"
 
 #include <orbis/Http.h>
 #include <orbis/_types/http.h>
 #include <orbis/Ssl.h>
+#include <orbis/_types/sysmodule.h>
 
 #include <pthread.h>
 #include <stdio.h>
@@ -67,6 +69,11 @@ static bool ensure_init_locked(void)
 
     if (s_ready) {
         return true;
+    }
+    if (!modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_HTTP) ||
+        !modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_SSL)) {
+        LOG_WARN("http: http/ssl module unavailable; remote fetches disabled");
+        return false;
     }
     if (!netmon_is_up() || netmon_mem_id() < 0) {
         return false;

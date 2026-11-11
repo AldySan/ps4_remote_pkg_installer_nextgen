@@ -9,8 +9,10 @@
  */
 #include "bgft.h"
 #include "log.h"
+#include "modules.h"
 
 #include <orbis/UserService.h>
+#include <orbis/_types/sysmodule.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +26,11 @@ bool bgft_init(void)
 
     if (s_initialized) {
         return true;
+    }
+
+    if (!modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_BGFT)) {
+        LOG_WARN("bgft: module unavailable; installs disabled");
+        return false;
     }
 
     memset(&s_init_params, 0, sizeof(s_init_params));
@@ -66,6 +73,11 @@ int bgft_get_user_id(void)
 {
     int user_id = -1;
     int ret;
+
+    if (!modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_USER_SERVICE)) {
+        LOG_WARN("bgft: user service unavailable; cannot resolve the user");
+        return -1;
+    }
 
     ret = sceUserServiceGetForegroundUser(&user_id);
     if (ret != 0) {
