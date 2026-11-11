@@ -44,15 +44,24 @@ static bool s_ui_ok = false;   /* false = running headless (API only) */
 
 static bool s_running = true;
 
-/* The process may arrive with libSceUserService already initialized (the
- * loader or the environment can set it up before main() runs). That is a
- * healthy state to run in, not a failure: the established console input
- * helpers treat this return code as benign and keep going. */
+/* The user service may already be initialized when this app gets to it:
+ * either SDL-PS4's video bootstrap performed it, or the process arrived
+ * that way. Both are healthy states, so only a genuine failure is fatal. */
 #define SCE_USER_SERVICE_ERROR_ALREADY_INITIALIZED ((int)0x80960003)
 
 /* True only when this app performed the user service initialization, so the
  * shutdown path never terminates a service it does not own. */
 static bool s_user_service_owned = false;
+
+static void ensure_user_service(void)
+{
+    int ret = sceUserServiceInitialize(NULL);
+    if (ret == 0) {
+        s_user_service_owned = true;
+    } else if (ret != SCE_USER_SERVICE_ERROR_ALREADY_INITIALIZED) {
+        LOG_WARN("sceUserServiceInitialize failed: 0x%08X", ret);
+    }
+}
 
 static void on_netmon_event(void* arg, bool up)
 {
@@ -132,7 +141,6 @@ static void draw_frame(void)
 
 int main(void)
 {
-    int ret;
     int user_id = -1;
 
     /* Kernel log sink is always available; UDP sink activates when network is up. */
@@ -145,27 +153,14 @@ int main(void)
         goto err;
     }
 
-    ret = sceUserServiceInitialize(NULL);
-    if (ret != 0 && ret != SCE_USER_SERVICE_ERROR_ALREADY_INITIALIZED) {
-        LOG_ERROR("sceUserServiceInitialize failed: 0x%08X", ret);
-        goto err_modules_unload;
-    }
-    s_user_service_owned = (ret == 0);
-
-    if (sceUserServiceGetInitialUser(&user_id) != 0) {
-        LOG_WARN("userService: no initial user; local input disabled");
-        user_id = -1;
-    }
-
     /*
-     * Local input is opened before the UI so a missing pad never stands
-     * between the user and the app. Failure is not fatal: control stays
-     * available through the web dashboard.
+     * Video comes up first because SDL-PS4's video bootstrap loads the pad
+     * and audio modules and performs the user service initialization itself,
+     * and it treats an already-initialized service as a hard failure: an
+     * app-level sceUserServiceInitialize before this point would keep the
+     * renderer from ever starting. The headless path below fills the gap
+     * when SDL cannot run.
      */
-    if (user_id >= 0 && !pad_init(user_id)) {
-        LOG_WARN("pad unavailable; control continues through the web dashboard");
-    }
-
     if (SDL_Init(SDL_INIT_VIDEO) == 0) {
         s_window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, 0);
         if (s_window) {
@@ -217,6 +212,19 @@ int main(void)
         } else {
             LOG_WARN("ui unavailable; running headless, use the web dashboard");
         }
+    }
+
+    /* No-op when SDL's bootstrap already owns the user service. */
+    ensure_user_service();
+
+    if (sceUserServiceGetInitialUser(&user_id) != 0) {
+        LOG_WARN("userService: no initial user; local input disabled");
+        user_id = -1;
+    }
+
+    /* Local input is optional: control stays available through the web dashboard. */
+    if (user_id >= 0 && !pad_init(user_id)) {
+        LOG_WARN("pad unavailable; control continues through the web dashboard");
     }
 
     /*
@@ -307,9 +315,6 @@ int main(void)
     dbglogger_stop();
 
     return 0;
-
-err_modules_unload:
-    modules_unload();
 
 err:
     dbglogger_stop();
