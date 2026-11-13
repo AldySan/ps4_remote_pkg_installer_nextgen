@@ -5,6 +5,7 @@
  */
 #include "netmon.h"
 #include "crash.h"
+#include "diag.h"
 #include "log.h"
 #include "modules.h"
 #include "notify.h"
@@ -70,6 +71,7 @@ static void stack_init(void)
     s_mem_id = ret;
 
     s_stack_ready = true;
+    diag_note("net-stack");
     LOG_INFO("network stack ready (mem id %d)", s_mem_id);
 }
 
@@ -108,6 +110,7 @@ static void set_up(bool up)
         return;
     }
     s_up = up;
+    diag_note(up ? "net-up" : "net-down");
     if (up) {
         char ip[16] = { 0 };
         OrbisNetCtlInfo info;

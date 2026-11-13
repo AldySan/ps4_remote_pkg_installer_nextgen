@@ -14,6 +14,7 @@
  */
 
 #include "crash.h"
+#include "diag.h"
 #include "log.h"
 #include "notify.h"
 #include "version.h"
@@ -88,15 +89,14 @@ static struct crash_slot* crash_find_slot(void)
     return NULL;
 }
 
-static void crash_note_last_words(void)
+static void crash_note_last_words(const char* detail)
 {
     OrbisNotificationRequest req;
 
     memset(&req, 0, sizeof(req));
     req.type = NotificationRequest;
     req.targetId = -1;
-    strlcpy(req.message, APP_SHORT_NAME ": closing after an internal error",
-            sizeof(req.message));
+    strlcpy(req.message, detail, sizeof(req.message));
     sceKernelSendNotificationRequest(0, &req, sizeof(req), 0);
 }
 
@@ -127,16 +127,32 @@ static void crash_handler(int sig, void* uc)
     sceKernelDebugOutText(0, line);
 
     slot = crash_find_slot();
-    if (!slot) {
-        crash_note_last_words();
-        _exit(0);
-    }
 
-    if (pthread_equal(pthread_self(), s_main_thread)) {
-        if (++s_main_strikes > CRASH_MAIN_STRIKE_LIMIT) {
-            crash_note_last_words();
+    /* Persist the fault before any recovery or exit: the journal survives
+     * the process, so a crash on a real console leaves evidence even when
+     * nothing else does. The notification keeps working in every degraded
+     * state and lands in the system feed the user can read afterwards. */
+    {
+        char detail[160];
+        const char* who = slot ? (pthread_equal(pthread_self(), s_main_thread)
+                                    ? "main" : "worker")
+                               : "unregistered";
+
+        snprintf(detail, sizeof(detail),
+                 "%s fault sig=%d addr=0x%llx rip=0x%llx at %s (%.0fs)",
+                 APP_SHORT_NAME, sig, (unsigned long long)fault_addr,
+                 (unsigned long long)fault_rip, diag_step(), diag_uptime());
+        diag_crash_note("%s [thread=%s]", detail, who);
+        if (!slot) {
+            crash_note_last_words(detail);
             _exit(0);
         }
+        if (pthread_equal(pthread_self(), s_main_thread) &&
+            ++s_main_strikes > CRASH_MAIN_STRIKE_LIMIT) {
+            crash_note_last_words(detail);
+            _exit(0);
+        }
+        notify_send("%s (recovered)", detail);
     }
 
     s_pending_sig = sig;
