@@ -12,6 +12,7 @@
 #include "appinst.h"
 #include "bgft.h"
 #include "crash.h"
+#include "diag.h"
 #include "http_client.h"
 #include "installer.h"
 #include "log.h"
@@ -171,12 +172,14 @@ int main(void)
     dbglogger_init();
 
     LOG_INFO("%s v%s starting", APP_NAME, APP_VERSION);
+    diag_note("start");
 
     crash_init();
 
     if (sigsetjmp(fault_jb, 1) != 0) {
         s_ui_ok = false;
         s_safe_mode = true;
+        diag_note("fault-recovered");
         LOG_WARN("recovered from signal %d; running in background mode",
                  crash_pending_signal());
         notify_send("%s: recovered from an internal error; running in background",
@@ -193,6 +196,7 @@ int main(void)
          * mask and the app keeps serving whatever did come up.
          */
         if (!modules_load()) {
+            diag_note("modules-partial");
             LOG_WARN("some system modules failed to load; starting with reduced features");
             notify_send("%s: some system modules failed; running with reduced features",
                         APP_SHORT_NAME);
@@ -206,6 +210,7 @@ int main(void)
          * renderer from ever starting. The headless path below fills the gap
          * when SDL cannot run.
          */
+        diag_note("video");
         if (SDL_Init(SDL_INIT_VIDEO) == 0) {
             s_window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, 0);
             if (s_window) {
@@ -231,6 +236,7 @@ int main(void)
         }
 
         if (!s_ui_ok) {
+            diag_note("headless");
             /*
              * The dashboard is the local view of the app, not its life
              * support. When any video-side step fails (SDL_Init, window,
@@ -262,6 +268,7 @@ int main(void)
         }
 
         /* No-op when SDL's bootstrap already owns the user service. */
+        diag_note("user-service");
         ensure_user_service();
 
         if (s_user_service_ok) {
@@ -284,17 +291,21 @@ int main(void)
          * alive with no network (the original build exited here) and services
          * start automatically once a link is available.
          */
+        diag_note("netmon");
         if (!netmon_start()) {
             LOG_WARN("netmon failed to start; continuing without network");
         }
 
         /* Install stack: AppInstUtil + BGFT + task registry with progress poller. */
+        diag_note("appinst");
         if (!appinst_init()) {
             LOG_WARN("appinst init failed; uninstall APIs disabled");
         }
+        diag_note("bgft");
         if (!bgft_init()) {
             LOG_WARN("bgft init failed; installs disabled");
         }
+        diag_note("taskman");
         if (!taskman_start()) {
             LOG_WARN("taskman failed to start; progress tracking disabled");
         }
@@ -322,6 +333,7 @@ int main(void)
         }
     }
 
+    diag_note("run");
     while (s_running) {
         if (!s_safe_mode) {
             handle_pad_frame();

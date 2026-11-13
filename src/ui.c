@@ -5,6 +5,7 @@
  */
 #include "ui.h"
 #include "crash.h"
+#include "diag.h"
 #include "font.h"
 #include "icon.h"
 #include "installer.h"
@@ -843,6 +844,8 @@ void ui_fini(void)
 
 void ui_frame(SDL_Renderer* r)
 {
+    char hud[64];
+
     ++s_frame_seq;
     s_icon_budget = 1; /* at most one icon decode per frame */
 
@@ -854,6 +857,12 @@ void ui_frame(SDL_Renderer* r)
     draw_jobs(r);
     draw_logs(r);
     draw_footer(r);
+
+    /* Flight recorder HUD: always visible, drawn last so it stays on top.
+     * On a crashing console the last on-screen step plus uptime pinpoints
+     * the dying subsystem in any phone video of the failure. */
+    diag_hud(hud, sizeof(hud));
+    font_draw(r, 12, 6, UI_SCALE_SM, TXT_DIM, hud);
 
     SDL_RenderPresent(r);
 }
