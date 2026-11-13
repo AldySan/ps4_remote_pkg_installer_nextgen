@@ -53,7 +53,7 @@ CFLAGS      := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c $(EXTRA
                -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include \
                -isystem $(TPDIR)/cJSON -isystem $(TPDIR)/dbglogger -isystem $(TPDIR)/stb
 LDFLAGS     := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr \
-               -Lthirdparty/stubs -L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
+               -L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
 
 # Create the intermediate directory in case it doesn't already exist.
 _unused     := $(shell mkdir -p $(INTDIR))
@@ -82,20 +82,6 @@ $(CONTENT_ID).pkg: pkg.gp4
 pkg.gp4: eboot.bin sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png sce_sys/pic0.png sce_sys/pic1.png $(LIBMODULES) $(ASSETS)
 	$(TOOLCHAIN)/bin/$(CDIR)/create-gp4 -out $@ --content-id=$(CONTENT_ID) --files "$^"
 
-# SDK lib shim for create-fself (it searches $OO_PS4_TOOLCHAIN/lib before
-# -library-path, so the custom stub must shadow the stock one there).
-STUBSDK      := build/sdkstub
-
-$(STUBSDK)/lib/libSceBgft.so: thirdparty/stubs/libSceBgft.so
-	mkdir -p $(STUBSDK)/lib
-	for f in $(TOOLCHAIN)/lib/*.so; do ln -sf $$f $(STUBSDK)/lib/; done
-	ln -sf $(CURDIR)/thirdparty/stubs/libSceBgft.so $(STUBSDK)/lib/libSceBgft.so
-
-# Custom libSceBgft stub (app-facing sceBgftDownload* symbols missing
-# from the stock toolchain stub; see thirdparty/stubs/bgft_stub.c).
-thirdparty/stubs/libSceBgft.so: $(TPDIR)/stubs/bgft_stub.c
-	$(CC) --target=x86_64-pc-freebsd12-elf -fPIC -shared -nostdlib -o $@ $<
-
 sce_sys/about/right.sprx:
 	mkdir -p sce_sys/about
 	printf 'SPRX' > $@
@@ -114,9 +100,9 @@ sce_sys/param.sfo: Makefile
 	$(TOOLCHAIN)/bin/$(CDIR)/PkgTool.Core sfo_setentry $@ TITLE_ID --type Utf8 --maxsize 12 --value '$(TITLE_ID)'
 	$(TOOLCHAIN)/bin/$(CDIR)/PkgTool.Core sfo_setentry $@ VERSION --type Utf8 --maxsize 8 --value '$(VERSION)'
 
-eboot.bin: $(INTDIR) $(OBJS) thirdparty/stubs/libSceBgft.so $(STUBSDK)/lib/libSceBgft.so
+eboot.bin: $(INTDIR) $(OBJS)
 	$(LD) $(INTDIR)/*.o -o $(OUTDIR)/$(notdir $(CURDIR)).elf $(LDFLAGS)
-	OO_PS4_TOOLCHAIN=$(CURDIR)/$(STUBSDK) $(TOOLCHAIN)/bin/$(CDIR)/create-fself -in=$(OUTDIR)/$(notdir $(CURDIR)).elf -out=$(OUTDIR)/eboot.oelf --eboot "eboot.bin" -library-path thirdparty/stubs --paid 0x3800000000000011 --authinfo 000000000000000000000000001C004000FF000000000080000000000000000000000000000000000000008000400040000000000000008000000000000000080040FFFF000000F000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+	OO_PS4_TOOLCHAIN=$(TOOLCHAIN) $(TOOLCHAIN)/bin/$(CDIR)/create-fself -in=$(OUTDIR)/$(notdir $(CURDIR)).elf -out=$(OUTDIR)/eboot.oelf --eboot "eboot.bin" --paid 0x3800000000000011 --authinfo 000000000000000000000000001C004000FF000000000080000000000000000000000000000000000000008000400040000000000000008000000000000000080040FFFF000000F000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 
 $(INTDIR)/%.o: $(PROJDIR)/%.c
 	$(CC) $(CFLAGS) -o $@ $<
