@@ -10,12 +10,48 @@
 #include "bgft.h"
 #include "log.h"
 #include "modules.h"
+#include "diag.h"
+
+#include <stdio.h>
 
 #include <orbis/UserService.h>
 #include <orbis/_types/sysmodule.h>
 
 #include <stdlib.h>
 #include <string.h>
+
+/*
+ * BGFT ServiceInt backend. Signatures follow the app-facing BGFT ABI used
+ * by ps4-ezremote-client for registration and task operations.
+ * These are intentionally declared locally: src/bgft.h exposes a separate
+ * app-facing API, while the SDK header has overlapping type definitions.
+ */
+extern int sceBgftServiceIntInit(SceBgftInitParams *params);
+extern int sceBgftServiceIntTerm(void);
+extern int sceBgftServiceIntDownloadRegisterTask(SceBgftDownloadParam *params,
+                                                SceBgftTaskId *task_id);
+extern int sceBgftServiceIntDebugDownloadRegisterPkg(SceBgftDownloadParam *params,
+                                                     SceBgftTaskId *task_id);
+extern int sceBgftServiceIntDownloadStartTask(SceBgftTaskId task_id);
+extern int sceBgftServiceIntDownloadPauseTask(SceBgftTaskId task_id);
+extern int sceBgftServiceIntDownloadResumeTask(SceBgftTaskId task_id);
+extern int sceBgftServiceIntDownloadStopTask(SceBgftTaskId task_id);
+extern int sceBgftServiceIntDownloadUnregisterTask(SceBgftTaskId task_id);
+extern int sceBgftServiceIntDownloadReregisterTaskPatch(SceBgftTaskId old_task_id,
+                                                       SceBgftTaskId *new_task_id);
+extern int sceBgftServiceDownloadGetProgress(SceBgftTaskId task_id,
+                                            SceBgftTaskProgress *progress);
+extern int sceBgftServiceDownloadFindTaskByContentId(
+    const char *content_id, enum SceBgftTaskSubType sub_type,
+    SceBgftTaskId *task_id);
+
+static void bgft_diag_ret(const char *operation, int ret)
+{
+    char message[96];
+    snprintf(message, sizeof(message), "serviceint-%s-ret-%08X", operation,
+             (unsigned)ret);
+    diag_note(message);
+}
 
 static bool s_initialized = false;
 static SceBgftInitParams s_init_params;
@@ -42,9 +78,21 @@ bool bgft_init(void)
     }
     memset(s_init_params.heap, 0, s_init_params.heapSize);
 
-    ret = sceBgftInitialize(&s_init_params);
+    diag_note("serviceint-backend-before-init");
+    {
+        int (*volatile init_fn)(SceBgftInitParams *) = sceBgftServiceIntInit;
+        if (!init_fn) {
+            diag_note("serviceint-backend-init-import-null");
+            free(s_init_params.heap);
+            s_init_params.heap = NULL;
+            s_init_params.heapSize = 0;
+            return false;
+        }
+        ret = init_fn(&s_init_params);
+    }
+    bgft_diag_ret("backend-init", ret);
     if (ret != 0) {
-        LOG_ERROR("sceBgftInitialize failed: 0x%08X", ret);
+        LOG_ERROR("sceBgftServiceIntInit failed: 0x%08X", ret);
         free(s_init_params.heap);
         s_init_params.heap = NULL;
         s_init_params.heapSize = 0;
@@ -61,7 +109,7 @@ void bgft_fini(void)
         return;
     }
 
-    sceBgftFinalize();
+    bgft_diag_ret("backend-term", sceBgftServiceIntTerm());
 
     free(s_init_params.heap);
     memset(&s_init_params, 0, sizeof(s_init_params));
@@ -123,11 +171,13 @@ bool bgft_register(const char* content_id, const char* content_url,
     params.packageSubType = package_sub_type ? package_sub_type : "";
     params.packageSize = (unsigned long)package_size;
 
+    diag_note(is_patch ? "serviceint-register-patch" : "serviceint-register-base");
     if (!is_patch) {
-        ret = sceBgftDownloadRegisterTask(&params, &task_id);
+        ret = sceBgftServiceIntDownloadRegisterTask(&params, &task_id);
     } else {
-        ret = sceBgftDebugDownloadRegisterPkg(&params, &task_id);
+        ret = sceBgftServiceIntDebugDownloadRegisterPkg(&params, &task_id);
     }
+    bgft_diag_ret("register", ret);
     if (ret != 0) {
         if (ret == (int)SCE_BGFT_ERROR_SAME_APPLICATION_ALREADY_INSTALLED) {
             /* Legacy behaviour: report success with task id -1. */
@@ -162,7 +212,8 @@ bool bgft_start_task(int task_id, int* error)
         if (error) *error = 0x80010002;
         return false;
     }
-    ret = sceBgftDownloadStartTask((SceBgftTaskId)task_id);
+    ret = sceBgftServiceIntDownloadStartTask((SceBgftTaskId)task_id);
+    bgft_diag_ret("start", ret);
     if (ret != 0) {
         if (error) *error = ret;
         return false;
@@ -178,7 +229,8 @@ bool bgft_pause_task(int task_id, int* error)
         if (error) *error = 0x80010002;
         return false;
     }
-    ret = sceBgftDownloadPauseTask((SceBgftTaskId)task_id);
+    ret = sceBgftServiceIntDownloadPauseTask((SceBgftTaskId)task_id);
+    bgft_diag_ret("pause", ret);
     if (ret != 0) {
         if (error) *error = ret;
         return false;
@@ -194,7 +246,8 @@ bool bgft_resume_task(int task_id, int* error)
         if (error) *error = 0x80010002;
         return false;
     }
-    ret = sceBgftDownloadResumeTask((SceBgftTaskId)task_id);
+    ret = sceBgftServiceIntDownloadResumeTask((SceBgftTaskId)task_id);
+    bgft_diag_ret("resume", ret);
     if (ret != 0) {
         if (error) *error = ret;
         return false;
@@ -210,7 +263,8 @@ bool bgft_stop_task(int task_id, int* error)
         if (error) *error = 0x80010002;
         return false;
     }
-    ret = sceBgftDownloadStopTask((SceBgftTaskId)task_id);
+    ret = sceBgftServiceIntDownloadStopTask((SceBgftTaskId)task_id);
+    bgft_diag_ret("stop", ret);
     if (ret != 0) {
         if (error) *error = ret;
         return false;
@@ -226,7 +280,8 @@ bool bgft_unregister_task(int task_id, int* error)
         if (error) *error = 0x80010002;
         return false;
     }
-    ret = sceBgftDownloadUnregisterTask((SceBgftTaskId)task_id);
+    ret = sceBgftServiceIntDownloadUnregisterTask((SceBgftTaskId)task_id);
+    bgft_diag_ret("unregister", ret);
     if (ret != 0) {
         if (error) *error = ret;
         return false;
@@ -243,7 +298,8 @@ bool bgft_reregister_patch(int old_task_id, int* new_task_id, int* error)
         if (error) *error = 0x80010002;
         return false;
     }
-    ret = sceBgftDownloadReregisterTaskPatch((SceBgftTaskId)old_task_id, &task_id);
+    ret = sceBgftServiceIntDownloadReregisterTaskPatch((SceBgftTaskId)old_task_id, &task_id);
+    bgft_diag_ret("reregister", ret);
     if (ret != 0) {
         if (error) *error = ret;
         return false;
@@ -261,7 +317,8 @@ bool bgft_get_progress(int task_id, SceBgftTaskProgress* progress, int* error)
         return false;
     }
     memset(progress, 0, sizeof(*progress));
-    ret = sceBgftDownloadGetProgress((SceBgftTaskId)task_id, progress);
+    ret = sceBgftServiceDownloadGetProgress((SceBgftTaskId)task_id, progress);
+    if (ret != 0) bgft_diag_ret("progress", ret);
     if (ret != 0) {
         if (error) *error = ret;
         return false;
@@ -280,6 +337,7 @@ bool bgft_find_task(const char* content_id, int sub_type, int* task_id, int* err
     }
     ret = sceBgftServiceDownloadFindTaskByContentId(
         content_id, (enum SceBgftTaskSubType)sub_type, &id);
+    bgft_diag_ret("find", ret);
     if (ret != 0) {
         if (error) *error = ret;
         return false;

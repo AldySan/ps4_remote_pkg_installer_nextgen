@@ -301,9 +301,13 @@ int main(void)
         if (!appinst_init()) {
             LOG_WARN("appinst init failed; uninstall APIs disabled");
         }
-        diag_note("bgft");
+        /* ServiceInt backend: now retains initialization for task operations. */
+        diag_note("bgft-serviceint-backend");
         if (!bgft_init()) {
-            LOG_WARN("bgft init failed; installs disabled");
+            diag_note("bgft-serviceint-backend-init-failed");
+            LOG_WARN("BGFT ServiceInt init failed; installs disabled");
+        } else {
+            diag_note("bgft-serviceint-backend-ready");
         }
         diag_note("taskman");
         if (!taskman_start()) {

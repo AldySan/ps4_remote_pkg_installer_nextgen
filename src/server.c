@@ -984,6 +984,17 @@ static void handle_v2_install(OrbisNetId fd, const char* body, size_t body_len)
 static void route(OrbisNetId fd, const char* method, const char* path,
                   const char* body, size_t body_len)
 {
+    /* Browser-based frontends send a preflight before JSON POST requests. */
+    if (strcmp(method, "OPTIONS") == 0) {
+        conn_send_str(fd, "HTTP/1.1 204 No Content\r\n");
+        conn_send_str(fd, "Access-Control-Allow-Origin: *\r\n");
+        conn_send_str(fd, "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
+        conn_send_str(fd, "Access-Control-Allow-Headers: Content-Type\r\n");
+        conn_send_str(fd, "Access-Control-Max-Age: 86400\r\n");
+        conn_send_str(fd, "Content-Length: 0\r\n");
+        conn_send_str(fd, "Connection: close\r\n\r\n");
+        return;
+    }
     if (strcmp(method, "GET") == 0 || strcmp(method, "HEAD") == 0) {
         if (strcmp(path, "/") == 0) {
             handle_v2_system(fd);
@@ -1117,6 +1128,7 @@ static bool conn_read_request(OrbisNetId fd, struct http_request* req)
     size_t used = 0;
     size_t cap = SERVER_REQ_HEAD_MAX + 16;
     char* header_end = NULL;
+    char* headers_start = NULL;
 
     buf = (char*)malloc(cap);
     if (!buf) {
@@ -1147,6 +1159,7 @@ static bool conn_read_request(OrbisNetId fd, struct http_request* req)
             return false;
         }
         *line_end = '\0';
+        headers_start = line_end + 2;
         {
             char* sp1 = strchr(buf, ' ');
             char* sp2;
@@ -1181,7 +1194,7 @@ static bool conn_read_request(OrbisNetId fd, struct http_request* req)
         char* p;
 
         /* Case-insensitive search for Content-Length. */
-        for (p = buf; p < header_end; ) {
+        for (p = headers_start; p < header_end; ) {
             if (strncasecmp(p, "Content-Length:", 15) == 0) {
                 cl = p + 15;
                 break;
