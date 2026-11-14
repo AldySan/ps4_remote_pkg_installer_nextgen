@@ -10,12 +10,14 @@
 #include "diag.h"
 #include "version.h"
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #define DIAG_BOOT_FILE  APP_WORK_DIR "/rpi_nextgen_boot.txt"
 #define DIAG_CRASH_FILE APP_WORK_DIR "/rpi_nextgen_crash.txt"
@@ -24,6 +26,7 @@ static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct timespec s_t0;
 static bool s_t0_set = false;
 static char s_step[40] = "pre-start";
+static int s_crash_fd = -1;
 
 static double mono_sec(void)
 {
@@ -93,14 +96,24 @@ void diag_hud(char* out, size_t outsz)
              diag_step());
 }
 
+int diag_crash_fd(void)
+{
+    pthread_mutex_lock(&s_lock);
+    if (s_crash_fd < 0) {
+        s_crash_fd = open(DIAG_CRASH_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    }
+    pthread_mutex_unlock(&s_lock);
+    return s_crash_fd;
+}
+
 void diag_crash_note(const char* fmt, ...)
 {
-    FILE* f;
     char line[256];
-    char stamp[40];
+    char stamped[320];
     struct timespec now;
     struct tm tm;
     va_list ap;
+    int fd;
 
     if (!fmt) {
         return;
@@ -112,13 +125,14 @@ void diag_crash_note(const char* fmt, ...)
 
     clock_gettime(CLOCK_REALTIME, &now);
     gmtime_r(&now.tv_sec, &tm);
-    snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02d UTC",
+    snprintf(stamped, sizeof(stamped), "[%04d-%02d-%02d %02d:%02d:%02d UTC] %s\n",
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min, tm.tm_sec);
+             tm.tm_hour, tm.tm_min, tm.tm_sec, line);
 
-    f = fopen(DIAG_CRASH_FILE, "a");
-    if (f) {
-        fprintf(f, "[%s] %s\n", stamp, line);
-        fclose(f);
+    /* Raw write() on the pre-opened fd: this path must stay usable from
+     * the fault handler, where allocation (fopen/fprintf) is illegal. */
+    fd = diag_crash_fd();
+    if (fd >= 0) {
+        write(fd, stamped, strlen(stamped));
     }
 }

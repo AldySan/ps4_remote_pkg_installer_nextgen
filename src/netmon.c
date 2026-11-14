@@ -4,11 +4,9 @@
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  */
 #include "netmon.h"
-#include "crash.h"
 #include "diag.h"
 #include "log.h"
 #include "modules.h"
-#include "notify.h"
 #include "version.h"
 
 #include <orbis/NetCtl.h>
@@ -16,7 +14,6 @@
 #include <orbis/_types/sysmodule.h>
 
 #include <pthread.h>
-#include <setjmp.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -127,18 +124,7 @@ static void set_up(bool up)
 
 static void* netmon_thread(void* arg)
 {
-    sigjmp_buf fault_jb;
-
     (void)arg;
-
-    if (sigsetjmp(fault_jb, 1) != 0) {
-        crash_disarm();
-        LOG_WARN("netmon thread stopped after an internal fault");
-        notify_send("%s: network monitor stopped after an internal error",
-                    APP_SHORT_NAME);
-        return NULL;
-    }
-    crash_arm(&fault_jb);
 
     while (s_started) {
         int state = NETMON_STATE_DISCONNECTED;
@@ -156,7 +142,6 @@ static void* netmon_thread(void* arg)
 
         usleep(NETMON_POLL_INTERVAL_MS * 1000);
     }
-    crash_disarm();
     return NULL;
 }
 
