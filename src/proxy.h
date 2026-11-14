@@ -20,16 +20,20 @@ bool proxy_register(int job_id, const char* const* urls,
                     const uint64_t* sizes, const bool* ranges_ok,
                     size_t count);
 
-/* Drops a job's proxy state. A live stream is aborted (its serving
+/*
+ * Drops a job's proxy state. A live stream is aborted (its serving
  * connection owns it and frees it via proxy_stream_close); the piece
- * table is released. */
+ * table is released.
+ */
 void proxy_unregister(int job_id);
 
 /*
- * Opens a streaming handle for a piece (starts the prefetch engine).
- * Connection count is chosen adaptively from size + Range support.
- * Only one piece streams per job at a time (BGFT reads sequentially);
- * opening a new piece aborts the previous one.
+ * Opens a streaming handle for a piece. Prefetch acceleration is used
+ * when the server supports Range requests and memory allows it; anything
+ * else is served through a sequential single-request stream, so a valid
+ * piece never fails to open. Connection count is chosen adaptively from
+ * size + Range support. Only one piece streams per job at a time (BGFT
+ * reads sequentially); opening a new piece aborts the previous one.
  */
 void* proxy_stream_open(int job_id, size_t piece, uint64_t* total_size);
 

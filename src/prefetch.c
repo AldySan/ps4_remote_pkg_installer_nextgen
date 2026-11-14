@@ -25,9 +25,11 @@
  * is throttled.
  */
 
-#define PREFETCH_RING_SIZE   (64u * 1024u * 1024u) /* 64 MiB ring */
-#define PREFETCH_CHUNK_SIZE  (2u * 1024u * 1024u)  /* per-request granularity */
-#define PREFETCH_MAX_CONNS   8
+#define PREFETCH_RING_BUDGET  (96u * 1024u * 1024u) /* shared by all streams */
+#define PREFETCH_RING_TARGET  (32u * 1024u * 1024u) /* per-stream default */
+#define PREFETCH_RING_MIN     (4u * 1024u * 1024u)
+#define PREFETCH_CHUNK_SIZE   (2u * 1024u * 1024u)  /* per-request granularity */
+#define PREFETCH_MAX_CONNS    8
 
 enum chunk_state {
     CHUNK_PENDING = 0,
@@ -64,6 +66,55 @@ struct prefetch {
 struct worker_ctx {
     prefetch_t* pf;
 };
+
+/* The heap is 256 MiB and BGFT downloads several tasks concurrently, so a
+ * fixed 64 MiB ring per stream exhausted it and made valid pieces fail.
+ * Every live stream now draws from a shared budget: the first stream gets
+ * the full target, later ones share what is left, and the floor keeps the
+ * engine usable instead of failing outright. */
+static pthread_mutex_t s_ring_lock = PTHREAD_MUTEX_INITIALIZER;
+static size_t s_ring_bytes = 0;
+
+static size_t ring_size_for(uint64_t total_size)
+{
+    size_t avail;
+    size_t want;
+
+    pthread_mutex_lock(&s_ring_lock);
+    avail = (s_ring_bytes < PREFETCH_RING_BUDGET)
+                ? PREFETCH_RING_BUDGET - s_ring_bytes
+                : 0;
+    pthread_mutex_unlock(&s_ring_lock);
+
+    want = (avail > PREFETCH_RING_TARGET) ? PREFETCH_RING_TARGET : avail;
+    if (want < PREFETCH_RING_MIN) {
+        want = PREFETCH_RING_MIN;
+    }
+    if ((uint64_t)want > total_size) {
+        want = (size_t)total_size;
+    }
+    /* Whole chunks only, so the worker window (ring / chunk) is never 0. */
+    want = (want + PREFETCH_CHUNK_SIZE - 1) & ~(size_t)(PREFETCH_CHUNK_SIZE - 1);
+    return want;
+}
+
+static void ring_budget_add(size_t bytes)
+{
+    pthread_mutex_lock(&s_ring_lock);
+    s_ring_bytes += bytes;
+    pthread_mutex_unlock(&s_ring_lock);
+}
+
+static void ring_budget_sub(size_t bytes)
+{
+    pthread_mutex_lock(&s_ring_lock);
+    if (s_ring_bytes >= bytes) {
+        s_ring_bytes -= bytes;
+    } else {
+        s_ring_bytes = 0;
+    }
+    pthread_mutex_unlock(&s_ring_lock);
+}
 
 static uint64_t chunk_start(size_t chunk)
 {
@@ -271,15 +322,7 @@ prefetch_t* prefetch_start(const char* url, uint64_t total_size, int connections
     snprintf(pf->url, sizeof(pf->url), "%s", url);
     pf->total_size = total_size;
     pf->connections = connections;
-    pf->ring_size = PREFETCH_RING_SIZE;
-    if (pf->ring_size > (size_t)total_size) {
-        /* Round up to a whole number of chunks so the worker window
-         * (ring_size / PREFETCH_CHUNK_SIZE chunks) is never empty: a ring
-         * smaller than one chunk left nothing claimable and hung both the
-         * workers and the reader on pieces < 2 MiB. */
-        pf->ring_size = (size_t)((total_size + PREFETCH_CHUNK_SIZE - 1) &
-                                 ~(uint64_t)(PREFETCH_CHUNK_SIZE - 1));
-    }
+    pf->ring_size = ring_size_for(total_size);
 
     /* Init the sync primitives BEFORE any allocation that can fail: the
      * err path below locks/broadcasts/joins through them, so they must
@@ -289,6 +332,9 @@ prefetch_t* prefetch_start(const char* url, uint64_t total_size, int connections
     pthread_cond_init(&pf->work_avail, NULL);
 
     pf->ring = (uint8_t*)malloc(pf->ring_size);
+    if (pf->ring) {
+        ring_budget_add(pf->ring_size);
+    }
     pf->chunk_count = (size_t)((total_size + PREFETCH_CHUNK_SIZE - 1) / PREFETCH_CHUNK_SIZE);
     pf->chunk_state = (uint8_t*)calloc(pf->chunk_count, 1);
     if (!pf->ring || !pf->chunk_state) {
@@ -328,7 +374,10 @@ err:
     pthread_mutex_destroy(&pf->lock);
     pthread_cond_destroy(&pf->data_avail);
     pthread_cond_destroy(&pf->work_avail);
-    free(pf->ring);
+    if (pf->ring) {
+        ring_budget_sub(pf->ring_size);
+        free(pf->ring);
+    }
     free(pf->chunk_state);
     free(pf);
     return NULL;
@@ -350,6 +399,12 @@ int64_t prefetch_read(prefetch_t* pf, uint8_t* buf, size_t len)
         if (pos >= pf->total_size) {
             pthread_mutex_unlock(&pf->lock);
             return 0; /* EOF */
+        }
+        if (pf->read_failed || pf->aborting) {
+            /* Fail fast: a stopped or broken stream must not keep serving
+             * ring data that its consumer no longer wants. */
+            pthread_mutex_unlock(&pf->lock);
+            return -1;
         }
         if (end > pf->total_size) {
             end = pf->total_size;
@@ -416,7 +471,10 @@ void prefetch_free(prefetch_t* pf)
     pthread_mutex_destroy(&pf->lock);
     pthread_cond_destroy(&pf->data_avail);
     pthread_cond_destroy(&pf->work_avail);
-    free(pf->ring);
+    if (pf->ring) {
+        ring_budget_sub(pf->ring_size);
+        free(pf->ring);
+    }
     free(pf->chunk_state);
     free(pf);
 }
