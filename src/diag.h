@@ -26,5 +26,11 @@ double diag_uptime(void);
 void diag_hud(char* out, size_t outsz);
 
 /* Appends one line to /data/rpi_nextgen_crash.txt with a wall-clock stamp.
- * Used from the fault handler right before recovery or clean exit. */
+ * Used from the fault handler right before recovery or clean exit; the
+ * write goes through a pre-opened fd so it stays legal in that context. */
 void diag_crash_note(const char* fmt, ...);
+
+/* The pre-opened, append-only fd of the crash journal (-1 when the file
+ * cannot be created). Warm it once before any fault can occur; the fault
+ * handler then writes to it without allocating or locking. */
+int diag_crash_fd(void);

@@ -4,14 +4,10 @@
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  */
 #include "taskman.h"
-#include "crash.h"
 #include "log.h"
-#include "notify.h"
 #include "util.h"
-#include "version.h"
 
 #include <pthread.h>
-#include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -178,18 +174,7 @@ static void poll_task(struct taskman_slot* slot)
 
 static void* taskman_thread(void* arg)
 {
-    sigjmp_buf fault_jb;
-
     (void)arg;
-
-    if (sigsetjmp(fault_jb, 1) != 0) {
-        crash_disarm();
-        LOG_WARN("taskman thread stopped after an internal fault");
-        notify_send("%s: progress tracking stopped after an internal error",
-                    APP_SHORT_NAME);
-        return NULL;
-    }
-    crash_arm(&fault_jb);
 
     while (s_running) {
         int i;
@@ -213,7 +198,6 @@ static void* taskman_thread(void* arg)
 
         usleep(TASKMAN_POLL_MS * 1000);
     }
-    crash_disarm();
     return NULL;
 }
 

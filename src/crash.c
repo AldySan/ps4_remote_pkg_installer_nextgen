@@ -6,17 +6,22 @@
  * Fault recovery net.
  *
  * Hardware faults on the PS4 reach handlers installed through
- * sceKernelInstallExceptionHandler, not sigaction handlers, so every
- * service thread arms its own recovery point here and a fault turns into
- * a jump back into that thread instead of a killed process. A thread that
- * never armed one, or the main thread faulting past its strike limit,
- * takes the app down cleanly with a notification on the way out.
+ * sceKernelInstallExceptionHandler, not sigaction handlers. The handler
+ * below must stay async-signal-safe: no allocation, no stdio, no locks,
+ * because the fault may have interrupted the allocator or any lock
+ * holder mid-update.
+ *
+ * Only the main thread jumps back to its armed recovery point (the
+ * background safe mode). Any other thread leaves the app through
+ * _exit(0) with the fault journaled first: resuming a worker thread on
+ * possibly corrupted allocator or lock state is what used to surface as
+ * the allocator __bin_chunk trap (sig=10) on a later, unrelated
+ * malloc/free, so a worker fault is contained by a clean exit instead.
  */
 
 #include "crash.h"
 #include "diag.h"
 #include "log.h"
-#include "notify.h"
 #include "version.h"
 
 #include <orbis/libkernel.h>
@@ -27,12 +32,9 @@
 #include <string.h>
 #include <unistd.h>
 
-/* One slot per armed thread. The worst case already sums past 32:
- * 16 server connections + two prefetch streams x 8 workers + the
- * long-lived services (server, taskman, netmon, proxy, UI) + main.
- * A thread that fails to register loses the recovery net entirely,
- * so its first fault ends the app; 64 leaves headroom for that mix. */
-#define CRASH_MAX_THREADS 64
+/* Only long-lived recovery points register (main today); keep headroom
+ * so future callers can arm without resizing the table. */
+#define CRASH_MAX_THREADS 8
 
 /* The kernel takes FreeBSD signal numbers while the toolchain headers
  * carry Linux ones (SIGBUS is 10 on the console, 7 in the headers). */
@@ -60,11 +62,14 @@ struct crash_slot {
 /* Exported by the toolchain's libkernel stub but missing from its headers. */
 int sceKernelInstallExceptionHandler(int signum, void (*handler)(int, void*));
 
-/* Registration is deliberately lock-free: a slot is fully written before
- * its used flag, entries are only ever scanned, and the handler may run
- * while the heap is broken. */
+/* arm/disarm serialize on a plain static mutex; the handler scans the
+ * table WITHOUT it (a fault inside arm/disarm must not deadlock on the
+ * lock the faulting thread holds). The scan may miss a slot that is
+ * mid-registration, which only costs the journal the thread name. */
+static pthread_mutex_t s_slot_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct crash_slot s_slots[CRASH_MAX_THREADS];
 static pthread_t s_main_thread;
+static volatile int s_journal_fd = -1;
 static volatile sig_atomic_t s_in_handler = 0;
 static volatile sig_atomic_t s_main_strikes = 0;
 static volatile sig_atomic_t s_pending_sig = 0;
@@ -72,6 +77,7 @@ static volatile sig_atomic_t s_pending_sig = 0;
 static uint64_t crash_read_u64(const void* base, size_t off)
 {
     uint64_t v;
+
     memcpy(&v, (const unsigned char*)base + off, sizeof(v));
     return v;
 }
@@ -89,14 +95,14 @@ static struct crash_slot* crash_find_slot(void)
     return NULL;
 }
 
-static void crash_note_last_words(const char* detail)
+static void crash_notify(const char* message)
 {
     OrbisNotificationRequest req;
 
     memset(&req, 0, sizeof(req));
     req.type = NotificationRequest;
     req.targetId = -1;
-    strlcpy(req.message, detail, sizeof(req.message));
+    strlcpy(req.message, message, sizeof(req.message));
     sceKernelSendNotificationRequest(0, &req, sizeof(req), 0);
 }
 
@@ -106,7 +112,10 @@ static void crash_handler(int sig, void* uc)
     uint64_t fault_addr = 0;
     uint64_t fault_rip = 0;
     struct crash_slot* slot;
-    char line[128];
+    bool is_main;
+    char line[192];
+    char note[128];
+    int len;
 
     if (s_in_handler) {
         _exit(0);
@@ -121,40 +130,39 @@ static void crash_handler(int sig, void* uc)
         }
     }
 
-    snprintf(line, sizeof(line),
-             "[WARN] fault sig=%d addr=0x%llx rip=0x%llx; recovering\n",
-             sig, (unsigned long long)fault_addr, (unsigned long long)fault_rip);
-    sceKernelDebugOutText(0, line);
-
     slot = crash_find_slot();
+    is_main = slot && pthread_equal(pthread_self(), s_main_thread);
 
     /* Persist the fault before any recovery or exit: the journal survives
      * the process, so a crash on a real console leaves evidence even when
-     * nothing else does. The notification keeps working in every degraded
-     * state and lands in the system feed the user can read afterwards. */
-    {
-        char detail[160];
-        const char* who = slot ? (pthread_equal(pthread_self(), s_main_thread)
-                                    ? "main" : "worker")
-                               : "unregistered";
-
-        snprintf(detail, sizeof(detail),
-                 "%s fault sig=%d addr=0x%llx rip=0x%llx at %s (%.0fs)",
-                 APP_SHORT_NAME, sig, (unsigned long long)fault_addr,
-                 (unsigned long long)fault_rip, diag_step(), diag_uptime());
-        diag_crash_note("%s [thread=%s]", detail, who);
-        if (!slot) {
-            crash_note_last_words(detail);
-            _exit(0);
-        }
-        if (pthread_equal(pthread_self(), s_main_thread) &&
-            ++s_main_strikes > CRASH_MAIN_STRIKE_LIMIT) {
-            crash_note_last_words(detail);
-            _exit(0);
-        }
-        notify_send("%s (recovered)", detail);
+     * nothing else does. Raw write() on a pre-opened fd only - fopen and
+     * friends allocate, which is illegal here. */
+    len = snprintf(line, sizeof(line),
+                   "%s fault sig=%d addr=0x%llx rip=0x%llx at %s\n",
+                   is_main ? "main" : (slot ? "worker" : "unregistered"),
+                   sig, (unsigned long long)fault_addr,
+                   (unsigned long long)fault_rip, diag_step());
+    sceKernelDebugOutText(0, line);
+    if (s_journal_fd >= 0 && len > 0) {
+        write(s_journal_fd, line, (size_t)len);
     }
 
+    if (!is_main) {
+        snprintf(note, sizeof(note),
+                 "%s: internal error (sig=%d); see the crash journal; closing",
+                 APP_SHORT_NAME, sig);
+        crash_notify(note);
+        _exit(0);
+    }
+    if (++s_main_strikes > CRASH_MAIN_STRIKE_LIMIT) {
+        snprintf(note, sizeof(note),
+                 "%s: too many internal errors; closing", APP_SHORT_NAME);
+        crash_notify(note);
+        _exit(0);
+    }
+
+    snprintf(note, sizeof(note), "%s (recovered)", line);
+    crash_notify(note);
     s_pending_sig = sig;
     s_in_handler = 0;
     siglongjmp(*slot->buf, 1);
@@ -168,6 +176,7 @@ void crash_init(void)
     size_t i;
 
     s_main_thread = pthread_self();
+    s_journal_fd = diag_crash_fd();
 
     for (i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i) {
         int ret = sceKernelInstallExceptionHandler(signals[i], crash_handler);
@@ -182,9 +191,11 @@ void crash_arm(sigjmp_buf* buf)
     pthread_t self = pthread_self();
     int i;
 
+    pthread_mutex_lock(&s_slot_lock);
     for (i = 0; i < CRASH_MAX_THREADS; ++i) {
         if (s_slots[i].used && pthread_equal(s_slots[i].tid, self)) {
             s_slots[i].buf = buf;
+            pthread_mutex_unlock(&s_slot_lock);
             return;
         }
     }
@@ -193,18 +204,23 @@ void crash_arm(sigjmp_buf* buf)
             s_slots[i].tid = self;
             s_slots[i].buf = buf;
             s_slots[i].used = true;
+            pthread_mutex_unlock(&s_slot_lock);
             return;
         }
     }
+    pthread_mutex_unlock(&s_slot_lock);
 }
 
 void crash_disarm(void)
 {
-    struct crash_slot* slot = crash_find_slot();
+    struct crash_slot* slot;
 
+    pthread_mutex_lock(&s_slot_lock);
+    slot = crash_find_slot();
     if (slot) {
         slot->used = false;
     }
+    pthread_mutex_unlock(&s_slot_lock);
 }
 
 int crash_pending_signal(void)

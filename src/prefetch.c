@@ -4,12 +4,10 @@
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  */
 #include "prefetch.h"
-#include "crash.h"
 #include "http_client.h"
 #include "log.h"
 
 #include <pthread.h>
-#include <setjmp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -132,25 +130,9 @@ static void* worker_thread(void* arg)
 {
     struct worker_ctx* ctx = (struct worker_ctx*)arg;
     prefetch_t* pf = ctx->pf;
-    sigjmp_buf fault_jb;
-    void* ret;
 
     free(ctx);
-
-    if (sigsetjmp(fault_jb, 1) != 0) {
-        crash_disarm();
-        pthread_mutex_lock(&pf->lock);
-        pf->read_failed = true;
-        pthread_cond_broadcast(&pf->data_avail);
-        pthread_mutex_unlock(&pf->lock);
-        LOG_WARN("prefetch worker stopped after an internal fault");
-        return NULL;
-    }
-    crash_arm(&fault_jb);
-
-    ret = worker_run(pf);
-    crash_disarm();
-    return ret;
+    return worker_run(pf);
 }
 
 static void* worker_run(prefetch_t* pf)
