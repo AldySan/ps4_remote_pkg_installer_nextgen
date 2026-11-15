@@ -41,6 +41,12 @@
 #define INSTALLER_WORK_DIR  "/data"
 #define INSTALLER_PORT      APP_DEFAULT_PORT
 
+/* Direct source URLs avoid the internal proxy path implicated in BGFT HTTP 400.
+ * Set to 1 explicitly only when proxy behavior has been independently validated. */
+#ifndef INSTALLER_USE_PROXY
+#define INSTALLER_USE_PROXY 0
+#endif
+
 /* Zero mini-digest placeholder, exactly like the original manifests. */
 static const uint8_t s_zero_mini_digest[PKG_DIGEST_SIZE - 12] = { 0 };
 
@@ -327,10 +333,15 @@ static bool install_pieces(const char* const* urls, size_t url_count, bool is_re
             }
             total_sum += piece_sizes[i];
         }
-        /* Transfer acceleration: BGFT downloads pieces through our proxy
-         * (adaptive multi-segment prefetch). Falls back to the original
-         * URLs when the proxy registry is full. */
+        /* BGFT downloads from original source URLs by default. This avoids
+         * the PS4-local proxy endpoint implicated in HTTP 400 failures.
+         * Proxy remains opt-in at compile time for controlled testing only. */
+#if INSTALLER_USE_PROXY
         proxy_ok = proxy_register(job_id, urls, piece_sizes, ranges_ok, url_count);
+#else
+        proxy_ok = false;
+        LOG_INFO("installer: BGFT direct-source mode (internal proxy disabled)");
+#endif
         free(ranges_ok);
     }
     if (hdr.package_size > 0 && total_sum != hdr.package_size) {
