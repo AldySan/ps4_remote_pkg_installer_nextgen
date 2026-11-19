@@ -19,6 +19,8 @@
 
 #include <orbis/Pad.h>
 #include <orbis/_types/pad.h>
+#include <orbis/Sysmodule.h>
+#include <orbis/_types/sysmodule.h>
 
 #include <string.h>
 
@@ -35,6 +37,14 @@ bool pad_init(int user_id)
 {
     OrbisPadData data;
     int ret;
+
+    /* Pad stubs only resolve once the module is loaded into the process:
+     * calling scePadInit before this load hangs on an unpatched stub. */
+    ret = sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_PAD);
+    if (ret != 0) {
+        LOG_WARN("sceSysmoduleLoadModuleInternal(PAD) failed: 0x%08X", ret);
+        return false;
+    }
 
     ret = scePadInit();
     if (ret < 0) {

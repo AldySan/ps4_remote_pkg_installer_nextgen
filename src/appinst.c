@@ -5,9 +5,11 @@
  */
 #include "appinst.h"
 #include "log.h"
+#include "modules.h"
 #include "pkg.h"
 
 #include <orbis/AppInstUtil.h>
+#include <orbis/_types/sysmodule.h>
 
 static bool s_initialized = false;
 
@@ -17,6 +19,11 @@ bool appinst_init(void)
 
     if (s_initialized) {
         return true;
+    }
+
+    if (!modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_APP_INST_UTIL)) {
+        LOG_WARN("appinst: module unavailable; uninstall APIs disabled");
+        return false;
     }
 
     ret = sceAppInstUtilInitialize();

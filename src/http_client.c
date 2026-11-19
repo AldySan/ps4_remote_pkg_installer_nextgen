@@ -21,13 +21,16 @@
  */
 #include "http_client.h"
 #include "log.h"
+#include "modules.h"
 #include "netmon.h"
 #include "version.h"
 
 #include <orbis/Http.h>
 #include <orbis/_types/http.h>
 #include <orbis/Ssl.h>
+#include <orbis/_types/sysmodule.h>
 
+#include <ctype.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,6 +70,11 @@ static bool ensure_init_locked(void)
 
     if (s_ready) {
         return true;
+    }
+    if (!modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_HTTP) ||
+        !modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_SSL)) {
+        LOG_WARN("http: http/ssl module unavailable; remote fetches disabled");
+        return false;
     }
     if (!netmon_is_up() || netmon_mem_id() < 0) {
         return false;
@@ -151,6 +159,31 @@ static int create_template(void)
     return tpl;
 }
 
+/* Case-insensitive substring search. Response header names arrive in
+ * arbitrary casing (Content-Range:, content-range:, Content-range:),
+ * and a missed header silently misreads the piece size. */
+static const char* strstr_ci(const char* hay, const char* needle)
+{
+    size_t nlen = strlen(needle);
+    size_t i;
+
+    if (nlen == 0) {
+        return hay;
+    }
+    for (; *hay; ++hay) {
+        for (i = 0; i < nlen; ++i) {
+            if (tolower((unsigned char)hay[i]) !=
+                tolower((unsigned char)needle[i]) || hay[i] == '\0') {
+                break;
+            }
+        }
+        if (i == nlen) {
+            return hay;
+        }
+    }
+    return NULL;
+}
+
 /* Parses "Content-Range: bytes 0-0/123456" total part. */
 static bool parse_content_range_total(const char* headers, uint64_t* total)
 {
@@ -161,10 +194,7 @@ static bool parse_content_range_total(const char* headers, uint64_t* total)
     if (!headers || !total) {
         return false;
     }
-    p = strstr(headers, "content-range:");
-    if (!p) {
-        p = strstr(headers, "Content-Range:");
-    }
+    p = strstr_ci(headers, "content-range:");
     if (!p) {
         return false;
     }
@@ -407,6 +437,115 @@ void http_session_close(http_session_t* session)
     sceHttpDeleteConnection(session->conn);
     sceHttpDeleteTemplate(session->tpl);
     free(session);
+    pthread_mutex_lock(&s_lock);
+    busy_release_locked();
+    pthread_mutex_unlock(&s_lock);
+}
+
+struct http_stream {
+    int tpl;
+    int conn;
+    int req;
+};
+
+http_stream_t* http_stream_open(const char* url)
+{
+    http_stream_t* s;
+    int status = 0;
+    int ret;
+    bool inited;
+
+    if (!url) {
+        return NULL;
+    }
+
+    pthread_mutex_lock(&s_lock);
+    inited = ensure_init_locked();
+    if (inited) {
+        ++s_busy;
+    }
+    pthread_mutex_unlock(&s_lock);
+    if (!inited) {
+        return NULL;
+    }
+
+    s = (http_stream_t*)calloc(1, sizeof(*s));
+    if (!s) {
+        goto err;
+    }
+    s->tpl = -1;
+    s->conn = -1;
+    s->req = -1;
+
+    s->tpl = create_template();
+    if (s->tpl < 0) {
+        goto err;
+    }
+    s->conn = sceHttpCreateConnectionWithURL(s->tpl, url, 0);
+    if (s->conn < 0) {
+        LOG_ERROR("sceHttpCreateConnectionWithURL failed: 0x%08X", s->conn);
+        goto err;
+    }
+    s->req = sceHttpCreateRequestWithURL2(s->conn, "GET", url, (uint64_t)0);
+    if (s->req < 0) {
+        LOG_ERROR("sceHttpCreateRequestWithURL2 failed: 0x%08X", s->req);
+        goto err;
+    }
+    ret = sceHttpAddRequestHeader(s->req, "Accept-Encoding", "identity",
+                                  HTTP_HEADER_OVERWRITE);
+    if (ret != 0) {
+        LOG_ERROR("sceHttpAddRequestHeader failed: 0x%08X", ret);
+        goto err;
+    }
+    ret = sceHttpSendRequest(s->req, NULL, 0);
+    if (ret < 0) {
+        LOG_ERROR("sceHttpSendRequest failed: 0x%08X", ret);
+        goto err;
+    }
+    ret = sceHttpGetStatusCode(s->req, &status);
+    if (ret < 0 || !HTTP_IS_OK(status)) {
+        LOG_ERROR("http stream: GET '%s' failed: HTTP %d", url, status);
+        goto err;
+    }
+    return s;
+
+err:
+    if (s) {
+        if (s->req >= 0) {
+            sceHttpDeleteRequest(s->req);
+        }
+        if (s->conn >= 0) {
+            sceHttpDeleteConnection(s->conn);
+        }
+        if (s->tpl >= 0) {
+            sceHttpDeleteTemplate(s->tpl);
+        }
+        free(s);
+    }
+    pthread_mutex_lock(&s_lock);
+    busy_release_locked();
+    pthread_mutex_unlock(&s_lock);
+    return NULL;
+}
+
+int64_t http_stream_read(http_stream_t* stream, uint8_t* buf, size_t len)
+{
+    if (!stream || !buf || len == 0) {
+        return -1;
+    }
+    return (int64_t)sceHttpReadData(stream->req, buf, len);
+}
+
+void http_stream_close(http_stream_t* stream)
+{
+    if (!stream) {
+        return;
+    }
+    /* Delete while the busy reference still pins the http context. */
+    sceHttpDeleteRequest(stream->req);
+    sceHttpDeleteConnection(stream->conn);
+    sceHttpDeleteTemplate(stream->tpl);
+    free(stream);
     pthread_mutex_lock(&s_lock);
     busy_release_locked();
     pthread_mutex_unlock(&s_lock);

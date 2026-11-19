@@ -4,6 +4,7 @@
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  */
 #include "ui.h"
+#include "diag.h"
 #include "font.h"
 #include "icon.h"
 #include "installer.h"
@@ -670,8 +671,12 @@ static void* retry_thread(void* arg)
 {
     struct retry_ctx* ctx = (struct retry_ctx*)arg;
     install_result_t result;
-    char err[256];
+    char err[256] = "";
 
+    /* Runs the full install pipeline (remote pkg/SFO parsing, BGFT
+     * registration) off the UI thread. A fault in here takes the app
+     * down cleanly through the crash handler with the journal written,
+     * instead of resuming on possibly corrupted state. */
     if (ctx->is_ref) {
         if (!installer_install_ref_pkg_url(ctx->url, &result, err, sizeof(err))) {
             LOG_WARN("ui: re-transfer failed: %s", err);
@@ -825,6 +830,8 @@ void ui_fini(void)
 
 void ui_frame(SDL_Renderer* r)
 {
+    char hud[64];
+
     ++s_frame_seq;
     s_icon_budget = 1; /* at most one icon decode per frame */
 
@@ -836,6 +843,12 @@ void ui_frame(SDL_Renderer* r)
     draw_jobs(r);
     draw_logs(r);
     draw_footer(r);
+
+    /* Flight recorder HUD: always visible, drawn last so it stays on top.
+     * On a crashing console the last on-screen step plus uptime pinpoints
+     * the dying subsystem in any phone video of the failure. */
+    diag_hud(hud, sizeof(hud));
+    font_draw(r, 12, 6, UI_SCALE_SM, TXT_DIM, hud);
 
     SDL_RenderPresent(r);
 }

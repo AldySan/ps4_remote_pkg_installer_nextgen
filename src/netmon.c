@@ -4,11 +4,14 @@
  * Licensed under the GNU General Public License v3.0. See LICENSE for details.
  */
 #include "netmon.h"
+#include "diag.h"
 #include "log.h"
+#include "modules.h"
 #include "version.h"
 
 #include <orbis/NetCtl.h>
 #include <orbis/Net.h>
+#include <orbis/_types/sysmodule.h>
 
 #include <pthread.h>
 #include <unistd.h>
@@ -65,6 +68,7 @@ static void stack_init(void)
     s_mem_id = ret;
 
     s_stack_ready = true;
+    diag_note("net-stack");
     LOG_INFO("network stack ready (mem id %d)", s_mem_id);
 }
 
@@ -103,6 +107,7 @@ static void set_up(bool up)
         return;
     }
     s_up = up;
+    diag_note(up ? "net-up" : "net-down");
     if (up) {
         char ip[16] = { 0 };
         OrbisNetCtlInfo info;
@@ -146,6 +151,12 @@ bool netmon_start(void)
 
     if (s_started) {
         return true;
+    }
+
+    if (!modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_NETCTL) ||
+        !modules_is_loaded(ORBIS_SYSMODULE_INTERNAL_NET)) {
+        LOG_WARN("netmon: network modules unavailable; staying offline");
+        return false;
     }
 
     memset(s_subs, 0, sizeof(s_subs));

@@ -66,6 +66,21 @@ bool http_client_get_session(http_session_t** psess, const char* url,
  */
 bool http_client_probe(const char* url, uint64_t* total_size, bool* accepts_ranges);
 
+typedef struct http_stream http_stream_t;
+
+/*
+ * Sequential single-request GET stream: opens one request without a Range
+ * header and hands out the body read-by-read. This is the only way to
+ * stream from servers that ignore Range requests, and the low-memory
+ * fallback path for the piece proxy.
+ *
+ * Returns NULL on transport errors or non-2xx statuses. http_stream_read
+ * returns the byte count (0 at EOF) or -1 on error.
+ */
+http_stream_t* http_stream_open(const char* url);
+int64_t http_stream_read(http_stream_t* stream, uint8_t* buf, size_t len);
+void http_stream_close(http_stream_t* stream);
+
 /*
  * Tears down the SSL/HTTP contexts (safe to call when never initialized,
  * e.g. after the network went down mid-run). Deferred automatically while
